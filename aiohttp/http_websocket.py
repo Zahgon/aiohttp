@@ -1,4 +1,3 @@
-"""WebSocket protocol versions 13 and 8."""
 
 from ._websocket.helpers import WS_KEY, ws_ext_gen, ws_ext_parse
 from ._websocket.models import (
@@ -25,7 +24,6 @@ from ._websocket.models import (
 from ._websocket.reader import WebSocketReader
 from ._websocket.writer import WebSocketWriter
 
-# Messages that the WebSocketResponse.receive needs to handle internally
 _INTERNAL_RECEIVE_TYPES = frozenset(
     (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.PING, WSMsgType.PONG)
 )

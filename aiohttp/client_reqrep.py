@@ -91,23 +91,9 @@ class ClientTimeout:
     sock_connect: float | None = None
     ceil_threshold: float = 5
 
-    # pool_queue_timeout: Optional[float] = None
-    # dns_resolution_timeout: Optional[float] = None
-    # socket_connect_timeout: Optional[float] = None
-    # connection_acquiring_timeout: Optional[float] = None
-    # new_connection_timeout: Optional[float] = None
-    # http_header_timeout: Optional[float] = None
-    # response_body_timeout: Optional[float] = None
 
-    # to create a timeout specific for a single request, either
-    # - create a completely new one to overwrite the default
-    # - or use https://docs.python.org/3/library/dataclasses.html#dataclasses.replace
-    # to overwrite the defaults
 
     def __post_init__(self) -> None:
-        # Ensure total is never lower than a more specific timeout, otherwise
-        # the latter would be silently capped by total and rendered useless.
-        # total=None means the user explicitly disabled the total timeout.
         if self.total is None:
             return
         object.__setattr__(
@@ -190,19 +176,7 @@ class Fingerprint:
         self._hashfunc = hashfunc
         self._fingerprint = fingerprint
 
-    @property
-    def fingerprint(self) -> bytes:
-        return self._fingerprint
 
-    def check(self, transport: asyncio.Transport) -> None:
-        if not transport.get_extra_info("sslcontext"):
-            return
-        sslobj = transport.get_extra_info("ssl_object")
-        cert = sslobj.getpeercert(binary_form=True)
-        got = self._hashfunc(cert).digest()
-        if got != self._fingerprint:
-            host, port, *_ = transport.get_extra_info("peername")
-            raise ServerFingerprintMismatch(self._fingerprint, got, host, port)
 
 
 if ssl is not None:
@@ -215,12 +189,7 @@ _CONNECTION_CLOSED_EXCEPTION = ClientConnectionError("Connection closed")
 _SSL_SCHEMES = frozenset(("https", "wss"))
 
 
-# ConnectionKey is a NamedTuple because it is used as a key in a dict
-# and a set in the connector. Since a NamedTuple is a tuple it uses
-# the fast native tuple __hash__ and __eq__ implementation in CPython.
 class ConnectionKey(NamedTuple):
-    # the key should contain an information about used proxy / TLS
-    # to prevent reusing wrong connections from a pool
     host: str
     port: int | None
     is_ssl: bool
@@ -244,10 +213,6 @@ class ResponseParams(TypedDict):
 
 
 class ClientResponse(HeadersMixin):
-    # Some of these attributes are None when created,
-    # but will be set by the start() method.
-    # As the end user will likely never see the None values, we cheat the types below.
-    # from the Status-Line of the response
     version: HttpVersion | None = None  # HTTP-Version
     status: int = None  # type: ignore[assignment] # Status-Code
     reason: str | None = None  # Reason-Phrase
@@ -265,8 +230,6 @@ class ClientResponse(HeadersMixin):
     _continue: asyncio.Future[bool] | None = None
     _source_traceback: traceback.StackSummary | None = None
     _session: "ClientSession | None" = None
-    # set up by ClientRequest after ClientResponse object creation
-    # post-init stage allows to not change ctor signature
     _closed = True  # to allow __del__ for non-initialized properly response
     _released = False
     _in_context = False
@@ -294,12 +257,7 @@ class ClientResponse(HeadersMixin):
         stream_writer: AbstractStreamWriter,
         **kwargs: object,
     ) -> None:
-        # kwargs exists so authors of subclasses should expect to pass through unknown
-        # arguments. This allows us to safely add new arguments in future releases.
-        # But, we should never receive unknown arguments here in the parent class, this
-        # would indicate an argument has been named wrong or similar in the subclass.
         assert not kwargs, "Unexpected arguments to ClientResponse"
-        # URL forbids subclasses, so a simple type check is enough.
         assert type(url) is URL
 
         self.method = method
@@ -319,128 +277,37 @@ class ClientResponse(HeadersMixin):
         self._cache: dict[str, Any] = {}
         self._traces = traces
         self._loop = loop
-        # Save reference to _resolve_charset, so that get_encoding() will still
-        # work after the response has finished reading the body.
         if session is not None:
-            # store a reference to session #1985
             self._session = session
             self._resolve_charset = session._resolve_charset
         if loop.get_debug():
             self._source_traceback = traceback.extract_stack(sys._getframe(1))
 
-    def __reset_writer(self, _: object = None) -> None:
-        self.__writer = None
-        if self._stream_writer is not None:
-            self._output_size = self._stream_writer.output_size
-            self._stream_writer = None
-        if self._upload_complete is not None and not self._upload_complete.done():
-            self._upload_complete.set_result(None)
 
     @property
     def _writer(self) -> asyncio.Task[None] | None:
-        """The writer task for streaming data.
-
-        _writer is only provided for backwards compatibility
-        for subclasses that may need to access it.
-        """
-        return self.__writer
+        pass
 
     @_writer.setter
     def _writer(self, writer: asyncio.Task[None] | None) -> None:
-        """Set the writer task for streaming data."""
-        if self.__writer is not None:
-            self.__writer.remove_done_callback(self.__reset_writer)
-        self.__writer = writer
-        if writer is None:
-            return
-        if writer.done():
-            # The writer is already done, so we can clear it immediately.
-            self.__reset_writer()
-        else:
-            writer.add_done_callback(self.__reset_writer)
+        pass
 
     @property
     def output_size(self) -> int:
-        """Number of bytes sent for this request."""
-        if self._stream_writer is not None:
-            return self._stream_writer.output_size
-        return self._output_size
+        pass
 
     @property
     def upload_complete(self) -> "asyncio.Future[None]":
-        """Future set when the request body has been fully sent.
+        pass
 
-        Already done when the request had no body or was written eagerly.
-        """
-        if self._upload_complete is None:
-            self._upload_complete = self._loop.create_future()
-            if self._stream_writer is None:  # upload already finished
-                self._upload_complete.set_result(None)
-        return self._upload_complete
 
-    @property
-    def cookies(self) -> SimpleCookie:
-        if self._cookies is None:
-            if self._raw_cookie_headers is not None:
-                # Parse cookies for response.cookies (SimpleCookie for backward compatibility)
-                cookies = SimpleCookie()
-                # Use parse_set_cookie_headers for more lenient parsing that handles
-                # malformed cookies better than SimpleCookie.load
-                cookies.update(parse_set_cookie_headers(self._raw_cookie_headers))
-                self._cookies = cookies
-            else:
-                self._cookies = SimpleCookie()
-        return self._cookies
 
-    @cookies.setter
-    def cookies(self, cookies: SimpleCookie) -> None:
-        self._cookies = cookies
-        # Generate raw cookie headers from the SimpleCookie
-        if cookies:
-            self._raw_cookie_headers = tuple(
-                morsel.OutputString() for morsel in cookies.values()
-            )
-        else:
-            self._raw_cookie_headers = None
 
-    @reify
-    def url(self) -> URL:
-        return self._url
 
-    @reify
-    def real_url(self) -> URL:
-        return self._real_url
 
-    @reify
-    def host(self) -> str:
-        assert self._url.host is not None
-        return self._url.host
 
-    @reify
-    def headers(self) -> HeadersDictProxy:
-        return self._headers
 
-    @reify
-    def raw_headers(self) -> RawHeaders:
-        return self._raw_headers
 
-    @reify
-    def request_info(self) -> RequestInfo:
-        # Build RequestInfo lazily from components
-        headers = CIMultiDictProxy(self._request_headers)
-        return tuple.__new__(
-            RequestInfo, (self._url, self.method, headers, self._original_url)
-        )
-
-    @reify
-    def content_disposition(self) -> ContentDisposition | None:
-        raw = self._headers.get(hdrs.CONTENT_DISPOSITION)
-        if raw is None:
-            return None
-        disposition_type, params_dct = multipart.parse_content_disposition(raw)
-        params = MappingProxyType(params_dct)
-        filename = multipart.content_disposition_filename(params)
-        return ContentDisposition(disposition_type, params, filename)
 
     def __del__(self, _warnings: Any = warnings) -> None:
         if self._closed:
@@ -475,42 +342,11 @@ class ClientResponse(HeadersMixin):
         print(self.headers, file=out)
         return out.getvalue()
 
-    @property
-    def connection(self) -> "Connection | None":
-        return self._connection
 
     @reify
     def history(self) -> tuple["ClientResponse", ...]:
-        """A sequence of responses, if redirects occurred."""
-        return self._history
+        pass
 
-    @reify
-    def links(self) -> "MultiDictProxy[MultiDictProxy[str | URL]]":
-        links: MultiDict[MultiDictProxy[str | URL]] = MultiDict()
-        for val in self.headers.getall("link"):
-            match = re.match(r"\s*<(.*)>(.*)", val)
-            if match is None:  # Malformed link
-                continue
-            url, params_str = match.groups()
-            params = params_str.split(";")[1:]
-
-            link: MultiDict[str | URL] = MultiDict()
-
-            for param in params:
-                match = re.match(r"^\s*(\S*)\s*=\s*(['\"]?)(.*?)(\2)\s*$", param, re.M)
-                if match is None:  # Malformed param
-                    continue
-                key, _, value, _ = match.groups()
-
-                link.add(key, value)
-
-            key = link.get("rel", url)
-
-            link.add("url", self.url.join(URL(url)))
-
-            links.add(str(key), MultiDictProxy(link))
-
-        return MultiDictProxy(links)
 
     async def start(self, connection: "Connection") -> "ClientResponse":
         """Start response processing."""
@@ -520,7 +356,6 @@ class ClientResponse(HeadersMixin):
 
         with self._timer:
             while True:
-                # read response
                 try:
                     protocol = self._protocol
                     message, payload = await protocol.read()  # type: ignore[union-attr]
@@ -540,47 +375,26 @@ class ClientResponse(HeadersMixin):
                     set_result(self._continue, True)
                     self._continue = None
 
-        # payload eof handler
         payload.on_eof(self._response_eof)
 
-        # response status
         self.version = message.version
         self.status = message.code
         self.reason = message.reason
 
-        # headers
         self._headers = message.headers
         self._raw_headers = message.raw_headers
         self._upgraded = message.upgrade
 
-        # payload
         self.content = payload
 
         if self._traces and payload is not EMPTY_PAYLOAD:
             payload._on_chunk_received = self._on_chunk_response_received
 
-        # cookies
         if cookie_hdrs := self.headers._md.getall(hdrs.SET_COOKIE, ()):
-            # Store raw cookie headers for CookieJar
             self._raw_cookie_headers = tuple(cookie_hdrs)
         return self
 
-    def _response_eof(self) -> None:
-        if self._closed:
-            return
 
-        # protocol could be None because connection could be detached
-        protocol = self._connection and self._connection.protocol
-        if protocol is not None and protocol.upgraded:
-            return
-
-        self._closed = True
-        self._cleanup_writer()
-        self._release_connection()
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
 
     def close(self) -> None:
         if not self._released:
@@ -606,20 +420,12 @@ class ClientResponse(HeadersMixin):
 
     @property
     def ok(self) -> bool:
-        """Returns ``True`` if ``status`` is less than ``400``, ``False`` if not.
-
-        This is **not** a check for ``200 OK`` but a check that the response
-        status is under 400.
-        """
-        return 400 > self.status
+        pass
 
     def raise_for_status(self) -> None:
         if not self.ok:
-            # reason should always be not None for a started response
             assert self.reason is not None
 
-            # If we're in a context we can rely on __aexit__() to release as the
-            # exception propagates.
             if not self._in_context:
                 self.release()
 
@@ -662,13 +468,9 @@ class ClientResponse(HeadersMixin):
 
     def _notify_content(self) -> None:
         content = self.content
-        # content can be None here, but the types are cheated elsewhere.
         if content:  # type: ignore[truthy-bool]
             if content.exception() is None:
                 set_exception(content, _CONNECTION_CLOSED_EXCEPTION)
-            # The bound method installed in start() captures self, creating a
-            # response→payload→method→self cycle. Clear it eagerly so the
-            # response is reclaimable without waiting for cycle GC.
             if content._on_chunk_received is not None:
                 content._on_chunk_received = None
         self._released = True
@@ -686,13 +488,6 @@ class ClientResponse(HeadersMixin):
                     raise
         self.release()
 
-    async def _on_chunk_response_received(self, chunk: bytes) -> None:
-        try:
-            for trace in self._traces:
-                await trace.send_response_chunk_received(self.method, self.url, chunk)
-        except BaseException:
-            self.close()
-            raise
 
     async def read(self) -> bytes:
         """Read response payload."""
@@ -722,8 +517,6 @@ class ClientResponse(HeadersMixin):
         if mimetype.type == "application" and (
             mimetype.subtype == "json" or mimetype.subtype == "rdap"
         ):
-            # RFC 7159 states that the default encoding is UTF-8.
-            # RFC 7483 defines application/rdap+json
             return "utf-8"
 
         if self._body is None:
@@ -781,15 +574,11 @@ class ClientResponse(HeadersMixin):
         exc_tb: TracebackType | None,
     ) -> None:
         self._in_context = False
-        # similar to _RequestContextManager, we do not need to check
-        # for exceptions, response object can close connection
-        # if state is broken
         self.release()
         await self.wait_for_close()
 
 
 class ClientRequestBase:
-    """An internal class for proxy requests."""
 
     POST_METHODS = {hdrs.METH_PATCH, hdrs.METH_POST, hdrs.METH_PUT}
 
@@ -799,8 +588,6 @@ class ClientRequestBase:
     version = HttpVersion11
     _response = None
 
-    # These class defaults help create_autospec() work correctly.
-    # If autospec is improved in future, maybe these can be removed.
     url = URL()
     method = "GET"
 
@@ -808,10 +595,6 @@ class ClientRequestBase:
 
     _skip_auto_headers: "CIMultiDict[None] | None" = None
 
-    # N.B.
-    # Adding __del__ method with self._writer closing doesn't make sense
-    # because _writer is instance method, thus it keeps a reference to self.
-    # Until writer has finished finalizer will not be called.
 
     def __init__(
         self,
@@ -828,7 +611,6 @@ class ClientRequestBase:
                 f"Method cannot contain non-token characters {method!r} "
                 f"(found at least {match.group()!r})"
             )
-        # URL forbids subclasses, so a simple type check is enough.
         assert type(url) is URL, url
         self.original_url = url
         self.url = url.with_fragment(None) if url.raw_fragment else url
@@ -847,8 +629,6 @@ class ClientRequestBase:
                 url.user or "", url.password or ""
             )
 
-    def _reset_writer(self, _: object = None) -> None:
-        self._writer_task = None
 
     def _get_content_length(self) -> int | None:
         """Extract and validate Content-Length header value.
@@ -864,49 +644,19 @@ class ClientRequestBase:
             raise ValueError(f"Invalid Content-Length header: {content_length_hdr!r}")
         return int(content_length_hdr)
 
-    @property
-    def _writer(self) -> asyncio.Task[None] | None:
-        return self._writer_task
 
-    @_writer.setter
-    def _writer(self, writer: asyncio.Task[None]) -> None:
-        if self._writer_task is not None:
-            self._writer_task.remove_done_callback(self._reset_writer)
-        self._writer_task = writer
-        writer.add_done_callback(self._reset_writer)
 
     def is_ssl(self) -> bool:
         return self.url.scheme in _SSL_SCHEMES
 
-    @property
-    def ssl(self) -> "SSLContext | bool | Fingerprint":
-        return self._ssl
 
-    @property
-    def connection_key(self) -> ConnectionKey:
-        url = self.url
-        return tuple.__new__(
-            ConnectionKey,
-            (
-                url.raw_host or "",
-                url.port,
-                url.scheme in _SSL_SCHEMES,
-                self._ssl,
-                None,
-                None,
-                self.server_hostname,
-            ),
-        )
 
     def _update_headers(self, headers: CIMultiDict[str]) -> None:
         """Update request headers."""
         self.headers: CIMultiDict[str] = CIMultiDict()
 
-        # Build the host header
         host = self.url.host_port_subcomponent
 
-        # host_port_subcomponent is None when the URL is a relative URL.
-        # but we know we do not have a relative URL here.
         assert host is not None
         self.headers[hdrs.HOST] = headers.pop(hdrs.HOST, host)
         self.headers.extend(headers)
@@ -937,10 +687,6 @@ class ClientRequestBase:
         return protocol.writing_paused
 
     async def _send(self, conn: "Connection") -> ClientResponse:
-        # Specify request target:
-        # - CONNECT request must send authority form URI
-        # - not CONNECT proxy must send absolute form URI
-        # - most common is origin form URI
         if self.method == hdrs.METH_CONNECT:
             connect_host = self.url.host_subcomponent
             assert connect_host is not None
@@ -954,7 +700,6 @@ class ClientRequestBase:
         assert protocol is not None
         writer = self._create_writer(protocol)
 
-        # set default content-type
         if (
             self.method in self.POST_METHODS
             and (
@@ -973,19 +718,14 @@ class ClientRequestBase:
             elif v == HttpVersion10:
                 self.headers[hdrs.CONNECTION] = "keep-alive"
 
-        # status + headers
         status_line = f"{self.method} {path} HTTP/{v.major}.{v.minor}"
 
-        # Buffer headers for potential coalescing with body
         await writer.write_headers(status_line, self.headers)
 
         task: asyncio.Task[None] | None
         if self._should_write(protocol):
             coro = self._write_bytes(writer, conn, self._get_content_length())
             if sys.version_info >= (3, 12):
-                # Optimization for Python 3.12, try to write
-                # bytes immediately to avoid having to schedule
-                # the task on the event loop.
                 task = asyncio.Task(coro, loop=self.loop, eager_start=True)
             else:
                 task = self.loop.create_task(coro)
@@ -994,10 +734,6 @@ class ClientRequestBase:
             else:
                 self._writer = task
         else:
-            # We have nothing to write because
-            # - there is no body
-            # - the protocol does not have writing paused
-            # - we are not waiting for a 100-continue response
             protocol.start_timeout()
             writer.set_eof()
             task = None
@@ -1010,7 +746,6 @@ class ClientRequestBase:
         conn: "Connection",
         content_length: int | None,
     ) -> None:
-        # Base class never has a body, this will never be run.
         assert False
 
 
@@ -1086,10 +821,6 @@ class ClientRequest(ClientRequestBase):
         server_hostname: str | None,
         **kwargs: object,
     ):
-        # kwargs exists so authors of subclasses should expect to pass through unknown
-        # arguments. This allows us to safely add new arguments in future releases.
-        # But, we should never receive unknown arguments here in the parent class, this
-        # would indicate an argument has been named wrong or similar in the subclass.
         assert not kwargs, "Unexpected arguments to ClientRequest"
 
         if params:
@@ -1122,39 +853,11 @@ class ClientRequest(ClientRequestBase):
     def body(self) -> payload.Payload:
         return self._body
 
-    @property
-    def skip_auto_headers(self) -> CIMultiDict[None]:
-        return self._skip_auto_headers or CIMultiDict()
 
-    @property
-    def connection_key(self) -> ConnectionKey:
-        if proxy_headers := self.proxy_headers:
-            h: int | None = hash(tuple(proxy_headers.items()))
-        else:
-            h = None
-        url = self.url
-        return tuple.__new__(
-            ConnectionKey,
-            (
-                url.raw_host or "",
-                url.port,
-                url.scheme in _SSL_SCHEMES,
-                self._ssl,
-                self.proxy,
-                h,
-                self.server_hostname,
-            ),
-        )
 
     @property
     def session(self) -> "ClientSession":
-        """Return the ClientSession instance.
-
-        This property provides access to the ClientSession that initiated
-        this request, allowing middleware to make additional requests
-        using the same session.
-        """
-        return self._session
+        pass
 
     def _update_auto_headers(self, skip_auto_headers: Iterable[str] | None) -> None:
         if skip_auto_headers is not None:
@@ -1164,8 +867,6 @@ class ClientRequest(ClientRequestBase):
             used_headers = self.headers.copy()
             used_headers.extend(self._skip_auto_headers)  # type: ignore[arg-type]
         else:
-            # Fast path when there are no headers to skip
-            # which is the most common case.
             used_headers = self.headers
 
         for hdr, val in self.DEFAULT_HEADERS.items():
@@ -1182,12 +883,10 @@ class ClientRequest(ClientRequestBase):
 
         c = SimpleCookie()
         if hdrs.COOKIE in self.headers:
-            # parse_cookie_header for RFC 6265 compliant Cookie header parsing
             c.update(parse_cookie_header(self.headers.get(hdrs.COOKIE, "")))
             del self.headers[hdrs.COOKIE]
 
         for name, value in cookies.items():
-            # Use helper to preserve coded_value exactly as sent by server
             c[name] = preserve_morsel_with_coded_value(value)
 
         self.headers[hdrs.COOKIE] = c.output(header="", sep=";").strip()
@@ -1237,7 +936,6 @@ class ClientRequest(ClientRequestBase):
         """Update request body from data."""
         if body is None:
             self._body = self._EMPTY_BODY
-            # Set Content-Length to 0 when body is None for methods that expect a body
             if (
                 self.method not in self.GET_METHODS
                 and not self.chunked
@@ -1246,7 +944,6 @@ class ClientRequest(ClientRequestBase):
                 self.headers[hdrs.CONTENT_LENGTH] = "0"
             return
 
-        # FormData
         if isinstance(body, FormData):
             body = body()
         else:
@@ -1269,7 +966,6 @@ class ClientRequest(ClientRequestBase):
             else:
                 self.chunked = True
 
-        # copy payload headers
         assert body.headers
         headers = self.headers
         skip_headers = self._skip_auto_headers
@@ -1279,83 +975,10 @@ class ClientRequest(ClientRequestBase):
             headers[key] = value
 
     def _update_body(self, body: Any) -> None:
-        """Update request body after its already been set."""
-        # Remove existing Content-Length header since body is changing
-        if hdrs.CONTENT_LENGTH in self.headers:
-            del self.headers[hdrs.CONTENT_LENGTH]
-
-        # Remove existing Transfer-Encoding header to avoid conflicts
-        if self.chunked and hdrs.TRANSFER_ENCODING in self.headers:
-            del self.headers[hdrs.TRANSFER_ENCODING]
-
-        # Now update the body using the existing method
-        self._update_body_from_data(body)
-
-        # Update transfer encoding headers if needed (same logic as __init__)
-        if body is not None or self.method not in self.GET_METHODS:
-            self._update_transfer_encoding()
+        pass
 
     async def update_body(self, body: Any) -> None:
-        """
-        Update request body and close previous payload if needed.
-
-        This method safely updates the request body by first closing any existing
-        payload to prevent resource leaks, then setting the new body.
-
-        IMPORTANT: Always use this method instead of setting request.body directly.
-        Direct assignment to request.body will leak resources if the previous body
-        contains file handles, streams, or other resources that need cleanup.
-
-        Args:
-            body: The new body content. Can be:
-                - bytes/bytearray: Raw binary data
-                - str: Text data (will be encoded using charset from Content-Type)
-                - FormData: Form data that will be encoded as multipart/form-data
-                - Payload: A pre-configured payload object
-                - AsyncIterable: An async iterable of bytes chunks
-                - File-like object: Will be read and sent as binary data
-                - None: Clears the body
-
-        Usage:
-            # CORRECT: Use update_body
-            await request.update_body(b"new request data")
-
-            # WRONG: Don't set body directly
-            # request.body = b"new request data"  # This will leak resources!
-
-            # Update with form data
-            form_data = FormData()
-            form_data.add_field('field', 'value')
-            await request.update_body(form_data)
-
-            # Clear body
-            await request.update_body(None)
-
-        Note:
-            This method is async because it may need to close file handles or
-            other resources associated with the previous payload. Always await
-            this method to ensure proper cleanup.
-
-        Warning:
-            Setting request.body directly is highly discouraged and can lead to:
-            - Resource leaks (unclosed file handles, streams)
-            - Memory leaks (unreleased buffers)
-            - Unexpected behavior with streaming payloads
-
-            It is not recommended to change the payload type in middleware. If the
-            body was already set (e.g., as bytes), it's best to keep the same type
-            rather than converting it (e.g., to str) as this may result in unexpected
-            behavior.
-
-        See Also:
-            - update_body_from_data: Synchronous body update without cleanup
-            - body property: Direct body access (STRONGLY DISCOURAGED)
-
-        """
-        # Close existing payload if it exists and needs closing
-        if self._body is not None:
-            await self._body.close()
-        self._update_body(body)
+        pass
 
     def _update_expect_continue(self, expect: bool = False) -> None:
         if expect:
@@ -1385,7 +1008,6 @@ class ClientRequest(ClientRequestBase):
                 "See third-party libraries for other proxy schemes."
             )
 
-        # URL-embedded credentials on the proxy map to Proxy-Authorization.
         if proxy.raw_user or proxy.raw_password:
             auth_header = encode_basic_auth(proxy.user or "", proxy.password or "")
             if proxy_headers is None:
@@ -1474,9 +1096,7 @@ class ClientRequest(ClientRequestBase):
             asyncio.CancelledError: When the operation is cancelled
 
         """
-        # 100 response
         if self._continue is not None:
-            # Force headers to be sent before waiting for 100-continue
             writer.send_headers()
             await writer.drain()
             await self._continue
@@ -1488,7 +1108,6 @@ class ClientRequest(ClientRequestBase):
         except OSError as underlying_exc:
             reraised_exc = underlying_exc
 
-            # Distinguish between timeout and other OS errors for better error reporting
             exc_is_not_timeout = underlying_exc.errno is not None or not isinstance(
                 underlying_exc, asyncio.TimeoutError
             )
@@ -1500,7 +1119,6 @@ class ClientRequest(ClientRequestBase):
 
             set_exception(protocol, reraised_exc, underlying_exc)
         except asyncio.CancelledError:
-            # Body hasn't been fully sent, so connection can't be reused
             conn.close()
             raise
         except Exception as underlying_exc:
@@ -1513,7 +1131,6 @@ class ClientRequest(ClientRequestBase):
                 underlying_exc,
             )
         else:
-            # Successfully wrote the body, signal EOF and start response timeout
             await writer.write_eof()
             protocol.start_timeout()
 
@@ -1529,19 +1146,5 @@ class ClientRequest(ClientRequestBase):
                 ):
                     raise
 
-    def _terminate(self) -> None:
-        if self._writer_task is not None:
-            if not self.loop.is_closed():
-                self._writer_task.cancel()
-            self._writer_task.remove_done_callback(self._reset_writer)
-            self._writer_task = None
 
-    async def _on_chunk_request_sent(self, method: str, url: URL, chunk: bytes) -> None:
-        for trace in self._traces:
-            await trace.send_request_chunk_sent(method, url, chunk)
 
-    async def _on_headers_request_sent(
-        self, method: str, url: URL, headers: "CIMultiDict[str]"
-    ) -> None:
-        for trace in self._traces:
-            await trace.send_request_headers(method, url, headers)

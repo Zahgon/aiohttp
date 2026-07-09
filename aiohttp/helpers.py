@@ -1,4 +1,3 @@
-"""Various helper functions"""
 
 import asyncio
 import base64
@@ -63,17 +62,11 @@ else:
 
 __all__ = ("ChainMapProxy", "ETag", "frozen_dataclass_decorator", "reify")
 
-# This is the default size/limit for several operations.
-# Matches the max size we receive from sockets:
-# https://github.com/python/cpython/blob/1857a40807daeae3a1bf5efb682de9c9ae6df845/Lib/asyncio/selector_events.py#L766
 DEFAULT_CHUNK_SIZE = 2**18  # 256 KiB
 COOKIE_MAX_LENGTH = 4096
 _QUOTED_PAIR_SUB = re.compile(r"\\(.)")
 _QUOTED_STRING = r'"(?:[^"\\]|\\.)*"'
 _ESCAPED_COMMENT = r"(?:[^()\\]|\\.)*"
-# Matches one element in a comma-separated header list.
-# Group 1: content of a top-level quoted-string (quotes stripped).
-# Group 2: an unquoted element (may contain parameter quoted-strings / comments).
 _LIST_ELEMENT_RE = re.compile(
     rf"""
     [ \t]*
@@ -91,7 +84,6 @@ _LIST_ELEMENT_RE = re.compile(
     """,
     re.VERBOSE,
 )
-# Finds parameter quoted-strings and comments inside an unquoted element for unescaping.
 _PROTECTED_RE = re.compile(
     rf"""
     (?<=[^\s]=) {_QUOTED_STRING}  # parameter quoted-string
@@ -108,10 +100,7 @@ sentinel = _SENTINEL.sentinel
 
 NO_EXTENSIONS = bool(os.environ.get("AIOHTTP_NO_EXTENSIONS"))
 
-# https://datatracker.ietf.org/doc/html/rfc9112#section-6.3-2.1
 EMPTY_BODY_STATUS_CODES = frozenset((204, 304, *range(100, 200)))
-# https://datatracker.ietf.org/doc/html/rfc9112#section-6.3-2.1
-# https://datatracker.ietf.org/doc/html/rfc9112#section-6.3-2.2
 EMPTY_BODY_METHODS = frozenset({hdrs.METH_HEAD})
 
 DEBUG = sys.flags.dev_mode or (
@@ -175,8 +164,6 @@ def strip_auth_from_url(url: URL) -> tuple[URL, str | None]:
     Returns a tuple of ``(url_without_credentials, authorization_header_value)``.
     The header value is ``None`` if no credentials were present.
     """
-    # Check raw_user and raw_password first as yarl is likely
-    # to already have these values parsed from the netloc in the cache.
     if url.raw_user is None and url.raw_password is None:
         return url, None
     return url.with_user(None), encode_basic_auth(url.user or "", url.password or "")
@@ -198,7 +185,6 @@ def netrc_from_env() -> netrc.netrc | None:
         try:
             home_dir = Path.home()
         except RuntimeError as e:
-            # if pathlib can't resolve home, it may raise a RuntimeError
             client_logger.debug(
                 "Could not resolve home directory when "
                 "trying to look for .netrc file: %s",
@@ -218,10 +204,7 @@ def netrc_from_env() -> netrc.netrc | None:
         netrc_exists = False
         with contextlib.suppress(OSError):
             netrc_exists = netrc_path.is_file()
-        # we couldn't read the file (doesn't exist, permissions, etc.)
         if netrc_env or netrc_exists:
-            # only warn if the environment wanted us to load it,
-            # or it appears like the default file does actually exist
             client_logger.warning("Could not read .netrc file: %s", e)
 
     return None
@@ -247,14 +230,8 @@ def _auth_header_from_netrc(netrc_obj: netrc.netrc | None, host: str) -> str:
         raise LookupError(f"No entry for {host!s} found in the `.netrc` file.")
     login, account, password = auth_from_netrc
 
-    # TODO(PY311): username = login or account
-    # Up to python 3.10, account could be None if not specified,
-    # and login will be empty string if not specified. From 3.11,
-    # login and account will be empty string if not specified.
     username = login if (login or account is None) else account
 
-    # TODO(PY311): Remove this, as password will be empty string
-    # if not specified
     if password is None:
         password = ""  # type: ignore[unreachable]
 
@@ -352,41 +329,15 @@ def parse_mimetype(mimetype: str) -> MimeType:
 class EnsureOctetStream(EmailMessage):
     def __init__(self) -> None:
         super().__init__()
-        # https://www.rfc-editor.org/rfc/rfc9110#section-8.3-5
         self.set_default_type("application/octet-stream")
 
     def get_content_type(self) -> str:
-        """Re-implementation from Message
-
-        Returns application/octet-stream in place of plain/text when
-        value is wrong.
-
-        The way this class is used guarantees that content-type will
-        be present so simplify the checks wrt to the base implementation.
-        """
-        value = self.get("content-type", "").lower()
-
-        # Based on the implementation of _splitparam in the standard library
-        ctype, _, _ = value.partition(";")
-        ctype = ctype.strip()
-        if ctype.count("/") != 1:
-            return self.get_default_type()
-        return ctype
+        pass
 
 
 @functools.lru_cache(maxsize=56)
 def parse_content_type(raw: str) -> tuple[str, MappingProxyType[str, str]]:
-    """Parse Content-Type header.
-
-    Returns a tuple of the parsed content type and a
-    MappingProxyType of parameters. The default returned value
-    is `application/octet-stream`
-    """
-    msg = HeaderParser(EnsureOctetStream, policy=HTTP).parsestr(f"Content-Type: {raw}")
-    content_type = msg.get_content_type()
-    params = msg.get_params(())
-    content_dict = dict(params[1:])  # First element is content type again
-    return content_type, MappingProxyType(content_dict)
+    pass
 
 
 def guess_filename(obj: Any, default: str | None = None) -> str | None:
@@ -487,8 +438,6 @@ def is_ip_address(host: str | None) -> bool:
     """
     if not host:
         return False
-    # For a host to be an ipv4 address, it must be all numeric.
-    # The host must contain a colon to be an IPv6 address.
     return ":" in host or host.replace(".", "").isdigit()
 
 
@@ -502,9 +451,6 @@ def is_canonical_ipv4_address(host: str) -> bool:
     if len(parts) != 4:
         return False
     for part in parts:
-        # Each octet must be 1-3 ASCII digits; reject unicode digits
-        # (which ``str.isdigit`` accepts but ``int`` may not), octal
-        # leading zeros, and values above 255.
         if not (1 <= len(part) <= 3) or not part.isascii() or not part.isdigit():
             return False
         if part[0] == "0" and len(part) != 1:
@@ -524,9 +470,6 @@ def rfc822_formatted_time() -> str:
 
     now = int(time.time())
     if now != _cached_current_datetime:
-        # Weekday and month names for HTTP date/time formatting;
-        # always English!
-        # Tuples are constants stored in codeobject!
         _weekdayname = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
         _monthname = (
             "",  # Dummy so we can use 1-based month numbers
@@ -558,12 +501,6 @@ def rfc822_formatted_time() -> str:
     return _cached_formatted_datetime
 
 
-def _weakref_handle(info: "tuple[weakref.ref[object], str]") -> None:
-    ref, name = info
-    ob = ref()
-    if ob is not None:
-        with suppress(Exception):
-            getattr(ob, name)()
 
 
 def weakref_handle(
@@ -608,7 +545,6 @@ def calculate_timeout_when(
 
 
 class TimeoutHandle:
-    """Timeout handle"""
 
     __slots__ = ("_timeout", "_loop", "_ceil_threshold", "_callbacks")
 
@@ -684,7 +620,6 @@ class TimerNoop(BaseTimerContext):
 
 
 class TimerContext(BaseTimerContext):
-    """Low resolution timeout context manager"""
 
     __slots__ = ("_loop", "_tasks", "_cancelled", "_cancelling")
 
@@ -705,9 +640,6 @@ class TimerContext(BaseTimerContext):
             raise RuntimeError("Timeout context manager should be used inside a task")
 
         if sys.version_info >= (3, 11):
-            # Remember if the task was already cancelling
-            # so when we __exit__ we can decide if we should
-            # raise asyncio.TimeoutError or let the cancellation propagate
             self._cancelling = task.cancelling()
 
         if self._cancelled:
@@ -728,13 +660,7 @@ class TimerContext(BaseTimerContext):
 
         if exc_type is asyncio.CancelledError and self._cancelled:
             assert enter_task is not None
-            # The timeout was hit, and the task was cancelled
-            # so we need to uncancel the last task that entered the context manager
-            # since the cancellation should not leak out of the context manager
             if sys.version_info >= (3, 11):
-                # If the task was already cancelling don't raise
-                # asyncio.TimeoutError and instead return None
-                # to allow the cancellation to propagate
                 if enter_task.uncancel() > self._cancelling:
                     return None
             raise asyncio.TimeoutError from exc_val
@@ -789,8 +715,6 @@ class HeadersDictProxy(Mapping[str, str]):
         return ", ".join(self._md.getall(key))
 
     def __iter__(self) -> Iterator[str]:
-        # We need to deduplicate keys from MultiDict
-        # But, we also need to retain ordering
         seen = set()
         for k in self._md.__iter__():
             if k in seen:
@@ -807,48 +731,24 @@ class HeadersDictProxy(Mapping[str, str]):
 
 
 class HeadersMixin:
-    """Mixin for handling headers."""
 
     _headers: Mapping[str, str]
     _content_type: str | None = None
     _content_dict: dict[str, str] | None = None
     _stored_content_type: str | None | _SENTINEL = sentinel
 
-    def _parse_content_type(self, raw: str | None) -> None:
-        self._stored_content_type = raw
-        if raw is None:
-            # default value according to RFC 2616
-            self._content_type = "application/octet-stream"
-            self._content_dict = {}
-        else:
-            content_type, content_mapping_proxy = parse_content_type(raw)
-            self._content_type = content_type
-            # _content_dict needs to be mutable so we can update it
-            self._content_dict = content_mapping_proxy.copy()
 
     @property
     def content_type(self) -> str:
-        """The value of content part for Content-Type HTTP header."""
-        raw = self._headers.get(hdrs.CONTENT_TYPE)
-        if self._stored_content_type != raw:
-            self._parse_content_type(raw)
-        assert self._content_type is not None
-        return self._content_type
+        pass
 
     @property
     def charset(self) -> str | None:
-        """The value of charset part for Content-Type HTTP header."""
-        raw = self._headers.get(hdrs.CONTENT_TYPE)
-        if self._stored_content_type != raw:
-            self._parse_content_type(raw)
-        assert self._content_dict is not None
-        return self._content_dict.get("charset")
+        pass
 
     @property
     def content_length(self) -> int | None:
-        """The value of Content-Length HTTP header."""
-        content_length = self._headers.get(hdrs.CONTENT_LENGTH)
-        return None if content_length is None else int(content_length)
+        pass
 
 
 def set_result(fut: "asyncio.Future[_T]", result: _T) -> None:
@@ -892,21 +792,12 @@ def set_exception(
 
 @functools.total_ordering
 class BaseKey(Generic[_T]):
-    """Base for concrete context storage key classes.
-
-    Each storage is provided with its own sub-class for the sake of some additional type safety.
-    """
 
     __slots__ = ("_name", "_t", "__orig_class__")
 
-    # This may be set by Python when instantiating with a generic type. We need to
-    # support this, in order to support types that are not concrete classes,
-    # like Iterable, which can't be passed as the second parameter to __init__.
     __orig_class__: type[object]
 
-    # TODO(PY314): Change Type to TypeForm (this should resolve unreachable below).
     def __init__(self, name: str, t: type[_T] | None = None):
-        # Prefix with module name to help deduplicate key names.
         frame = inspect.currentframe()
         while frame:
             if frame.f_code.co_name == "<module>":
@@ -916,7 +807,6 @@ class BaseKey(Generic[_T]):
         else:
             raise RuntimeError("Failed to get module name.")
 
-        # https://github.com/python/mypy/issues/14209
         self._name = module + "." + name  # type: ignore[possibly-undefined]
         self._t = t
 
@@ -929,7 +819,6 @@ class BaseKey(Generic[_T]):
         t = self._t
         if t is None:
             with suppress(AttributeError):
-                # Set to type arg.
                 t = get_args(self.__orig_class__)[0]
 
         if t is None:
@@ -945,15 +834,15 @@ class BaseKey(Generic[_T]):
 
 
 class AppKey(BaseKey[_T]):
-    """Keys for static typing support in Application."""
+    pass
 
 
 class RequestKey(BaseKey[_T]):
-    """Keys for static typing support in Request."""
+    pass
 
 
 class ResponseKey(BaseKey[_T]):
-    """Keys for static typing support in Response."""
+    pass
 
 
 @final
@@ -998,13 +887,11 @@ class ChainMapProxy(Mapping[str | AppKey[Any], Any]):
             return default
 
     def __len__(self) -> int:
-        # reuses stored hash values if possible
         return len(set().union(*self._maps))
 
     def __iter__(self) -> Iterator[str | AppKey[Any]]:
         d: dict[str | AppKey[Any], Any] = {}
         for mapping in reversed(self._maps):
-            # reuses stored hash values if possible
             d.update(mapping)
         return iter(d)
 
@@ -1020,15 +907,9 @@ class ChainMapProxy(Mapping[str | AppKey[Any], Any]):
 
 
 class CookieMixin:
-    """Mixin for handling cookies."""
 
     _cookies: SimpleCookie | None = None
 
-    @property
-    def cookies(self) -> SimpleCookie:
-        if self._cookies is None:
-            self._cookies = SimpleCookie()
-        return self._cookies
 
     def set_cookie(
         self,
@@ -1099,24 +980,7 @@ class CookieMixin:
         httponly: bool | None = None,
         samesite: str | None = None,
     ) -> None:
-        """Delete cookie.
-
-        Creates new empty expired cookie.
-        """
-        # TODO: do we need domain/path here?
-        if self._cookies is not None:
-            self._cookies.pop(name, None)
-        self.set_cookie(
-            name,
-            "",
-            max_age=0,
-            expires="Thu, 01 Jan 1970 00:00:00 GMT",
-            domain=domain,
-            path=path,
-            secure=secure,
-            httponly=httponly,
-            samesite=samesite,
-        )
+        pass
 
 
 def populate_with_cookies(headers: "CIMultiDict[str]", cookies: SimpleCookie) -> None:
@@ -1125,7 +989,6 @@ def populate_with_cookies(headers: "CIMultiDict[str]", cookies: SimpleCookie) ->
         headers.add(hdrs.SET_COOKIE, value)
 
 
-# https://tools.ietf.org/html/rfc7232#section-2.3
 _ETAGC = r"[!\x23-\x7E\x80-\xff]+"
 _ETAGC_RE = re.compile(_ETAGC)
 _QUOTED_ETAG = rf'(W/)?"({_ETAGC})"'
@@ -1173,8 +1036,6 @@ def should_remove_content_length(method: str, code: int) -> bool:
 
     This should always be a subset of must_be_empty_body
     """
-    # https://www.rfc-editor.org/rfc/rfc9110.html#section-8.6-8
-    # https://www.rfc-editor.org/rfc/rfc9110.html#section-15.4.5-4
     return code in EMPTY_BODY_STATUS_CODES or (
         200 <= code < 300 and method == hdrs.METH_CONNECT
     )

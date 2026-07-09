@@ -108,23 +108,8 @@ class TCPSite(BaseSite):
 
     @property
     def port(self) -> int:
-        """The port the server is listening on.
+        pass
 
-        If the server hasn't been started yet, this returns the requested port
-        (which might be 0 for a dynamic port).
-        After the server starts, it returns the actual bound port. This is
-        especially useful when port=0 was requested, as it allows retrieving the
-        dynamically assigned port after the site has started.
-        """
-        if self._bound_port is not None:
-            return self._bound_port
-        return self._port
-
-    @property
-    def name(self) -> str:
-        scheme = "https" if self._ssl_context else "http"
-        host = "0.0.0.0" if not self._host else self._host
-        return str(URL.build(scheme=scheme, host=host, port=self.port))
 
     async def start(self) -> None:
         await super().start()
@@ -164,10 +149,6 @@ class UnixSite(BaseSite):
         )
         self._path = path
 
-    @property
-    def name(self) -> str:
-        scheme = "https" if self._ssl_context else "http"
-        return f"{scheme}://unix:{self._path}:"
 
     async def start(self) -> None:
         await super().start()
@@ -196,9 +177,6 @@ class NamedPipeSite(BaseSite):
         super().__init__(runner)
         self._path = path
 
-    @property
-    def name(self) -> str:
-        return self._path
 
     async def start(self) -> None:
         await super().start()
@@ -236,9 +214,6 @@ class SockSite(BaseSite):
             name = str(URL.build(scheme=scheme, host=host, port=port))
         self._name = name
 
-    @property
-    def name(self) -> str:
-        return self._name
 
     async def start(self) -> None:
         await super().start()
@@ -266,25 +241,8 @@ class BaseRunner(ABC, Generic[_Request]):
         self._sites: list[BaseSite] = []
         self._shutdown_timeout = shutdown_timeout
 
-    @property
-    def server(self) -> Server[_Request] | None:
-        return self._server
 
-    @property
-    def addresses(self) -> list[Any]:
-        ret: list[Any] = []
-        for site in self._sites:
-            server = site._server
-            if server is not None:
-                sockets = server.sockets
-                if sockets is not None:
-                    for sock in sockets:
-                        ret.append(sock.getsockname())
-        return ret
 
-    @property
-    def sites(self) -> set[BaseSite]:
-        return set(self._sites)
 
     async def setup(self) -> None:
         loop = asyncio.get_running_loop()
@@ -294,7 +252,6 @@ class BaseRunner(ABC, Generic[_Request]):
                 loop.add_signal_handler(signal.SIGINT, _raise_graceful_exit)
                 loop.add_signal_handler(signal.SIGTERM, _raise_graceful_exit)
             except NotImplementedError:
-                # add_signal_handler is not implemented on Windows
                 pass
 
         self._server = await self._make_server()
@@ -304,16 +261,10 @@ class BaseRunner(ABC, Generic[_Request]):
         """Call any shutdown hooks to help server close gracefully."""
 
     async def cleanup(self) -> None:
-        # The loop over sites is intentional, an exception on gather()
-        # leaves self._sites in unpredictable state.
-        # The loop guarantees that a site is either deleted on success or
-        # still present on failure
         for site in list(self._sites):
             await site.stop()
 
         if self._server:  # If setup succeeded
-            # Yield to event loop to ensure incoming requests prior to stopping the sites
-            # have all started to be handled before we proceed to close idle connections.
             await asyncio.sleep(0)
             self._server.pre_shutdown()
             await self.shutdown()
@@ -327,7 +278,6 @@ class BaseRunner(ABC, Generic[_Request]):
                 loop.remove_signal_handler(signal.SIGINT)
                 loop.remove_signal_handler(signal.SIGTERM)
             except NotImplementedError:
-                # remove_signal_handler is not implemented on Windows
                 pass
 
     @abstractmethod
@@ -354,7 +304,6 @@ class BaseRunner(ABC, Generic[_Request]):
 
 
 class ServerRunner(BaseRunner[BaseRequest]):
-    """Low-level web server runner"""
 
     __slots__ = ("_web_server",)
 
@@ -379,7 +328,6 @@ class ServerRunner(BaseRunner[BaseRequest]):
 
 
 class AppRunner(BaseRunner[Request]):
-    """Web Application runner"""
 
     __slots__ = ("_app",)
 
@@ -412,9 +360,6 @@ class AppRunner(BaseRunner[Request]):
         super().__init__(handle_signals=handle_signals, **kwargs)
         self._app = app
 
-    @property
-    def app(self) -> Application:
-        return self._app
 
     async def shutdown(self) -> None:
         await self._app.shutdown()
@@ -430,27 +375,6 @@ class AppRunner(BaseRunner[Request]):
             **self._kwargs,
         )
 
-    def _make_request(
-        self,
-        message: RawRequestMessage,
-        payload: StreamReader,
-        protocol: RequestHandler[Request],
-        writer: AbstractStreamWriter,
-        task: "asyncio.Task[None]",
-        pre_handler_error: HTTPBadRequest | None,
-        _cls: type[Request] = Request,
-    ) -> Request:
-        loop = asyncio.get_running_loop()
-        return _cls(
-            message,
-            payload,
-            protocol,
-            writer,
-            task,
-            loop,
-            client_max_size=self.app._client_max_size,
-            pre_handler_error=pre_handler_error,
-        )
 
     async def _cleanup_server(self) -> None:
         await self._app.cleanup()

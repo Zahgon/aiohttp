@@ -1,7 +1,4 @@
-"""HTTP Headers constants."""
 
-# After changing the file content call ./tools/gen.py
-# to regenerate the headers parser
 import itertools
 from typing import Final
 
@@ -108,8 +105,6 @@ X_FORWARDED_FOR: Final[istr] = istr("X-Forwarded-For")
 X_FORWARDED_HOST: Final[istr] = istr("X-Forwarded-Host")
 X_FORWARDED_PROTO: Final[istr] = istr("X-Forwarded-Proto")
 
-# Case permutations of the Host header — for callers that match against
-# raw header tokens before istr/CIMultiDict folding.
 HOST_ALL: Final = frozenset(
     map("".join, itertools.product(*zip(HOST.upper(), HOST.lower())))
 )

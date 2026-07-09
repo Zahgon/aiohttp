@@ -73,17 +73,12 @@ __all__ = (
 
 
 class NotAppKeyWarning(UserWarning):
-    """Warning when not using AppKey in Application."""
+    pass
 
 
-############################################################
-# HTTP Exceptions
-############################################################
 
 
 class HTTPException(CookieMixin, Exception):
-    # You should set in subclasses:
-    # status = 200
 
     status_code = -1
     empty_body = False
@@ -141,21 +136,12 @@ class HTTPException(CookieMixin, Exception):
     def __bool__(self) -> bool:
         return True
 
-    @property
-    def status(self) -> int:
-        return self.status_code
 
-    @property
-    def reason(self) -> str:
-        return self._reason
 
     @property
     def text(self) -> str | None:
         return self._text
 
-    @property
-    def headers(self) -> "CIMultiDict[str]":
-        return self._headers
 
     def __str__(self) -> str:
         return self.reason
@@ -170,15 +156,15 @@ class HTTPException(CookieMixin, Exception):
 
 
 class HTTPError(HTTPException):
-    """Base class for exceptions with status codes in the 400s and 500s."""
+    pass
 
 
 class HTTPRedirection(HTTPException):
-    """Base class for exceptions with status codes in the 300s."""
+    pass
 
 
 class HTTPSuccessful(HTTPException):
-    """Base class for exceptions with status codes in the 200s."""
+    pass
 
 
 class HTTPOk(HTTPSuccessful):
@@ -211,9 +197,6 @@ class HTTPPartialContent(HTTPSuccessful):
     status_code = 206
 
 
-############################################################
-# 3xx redirection
-############################################################
 
 
 class HTTPMove(HTTPRedirection):
@@ -234,9 +217,6 @@ class HTTPMove(HTTPRedirection):
         self._location = URL(location)
         self.headers["Location"] = str(self.location)
 
-    @property
-    def location(self) -> URL:
-        return self._location
 
 
 class HTTPMultipleChoices(HTTPMove):
@@ -251,20 +231,16 @@ class HTTPFound(HTTPMove):
     status_code = 302
 
 
-# This one is safe after a POST (the redirected location will be
-# retrieved with GET):
 class HTTPSeeOther(HTTPMove):
     status_code = 303
 
 
 class HTTPNotModified(HTTPRedirection):
-    # FIXME: this should include a date or etag header
     status_code = 304
     empty_body = True
 
 
 class HTTPUseProxy(HTTPMove):
-    # Not a move, but looks a little like one
     status_code = 305
 
 
@@ -276,9 +252,6 @@ class HTTPPermanentRedirect(HTTPMove):
     status_code = 308
 
 
-############################################################
-# 4xx client error
-############################################################
 
 
 class HTTPClientError(HTTPError):
@@ -326,9 +299,6 @@ class HTTPMethodNotAllowed(HTTPClientError):
         self._allowed: set[str] = set(allowed_methods)
         self._method = method
 
-    @property
-    def allowed_methods(self) -> set[str]:
-        return self._allowed
 
     @property
     def method(self) -> str:
@@ -435,21 +405,8 @@ class HTTPUnavailableForLegalReasons(HTTPClientError):
             self._link = URL(link)
             self.headers["Link"] = f'<{str(self._link)}>; rel="blocked-by"'
 
-    @property
-    def link(self) -> URL | None:
-        return self._link
 
 
-############################################################
-# 5xx Server Error
-############################################################
-#  Response status codes beginning with the digit "5" indicate cases in
-#  which the server is aware that it has erred or is incapable of
-#  performing the request. Except when responding to a HEAD request, the
-#  server SHOULD include an entity containing an explanation of the error
-#  situation, and whether it is a temporary or permanent condition. User
-#  agents SHOULD display any included entity to the user. These response
-#  codes are applicable to any request method.
 
 
 class HTTPServerError(HTTPError):

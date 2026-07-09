@@ -1,4 +1,3 @@
-"""Helper methods to tune a TCP connection"""
 
 import asyncio
 import socket
@@ -31,6 +30,5 @@ def tcp_nodelay(transport: asyncio.Transport, value: bool) -> None:
 
     value = bool(value)
 
-    # socket may be closed already, on windows OSError get raised
     with suppress(OSError):
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, value)

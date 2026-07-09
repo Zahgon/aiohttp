@@ -1,4 +1,3 @@
-"""WebSocket client for asyncio."""
 
 import asyncio
 import sys
@@ -41,8 +40,6 @@ else:
     import async_timeout
     from typing_extensions import Self
 
-# TypeVar for whether text messages are decoded to str (True) or kept as bytes (False)
-# Covariant because it only affects return types, not input types
 _DecodeText = TypeVar("_DecodeText", bound=bool, covariant=True, default=Literal[True])
 
 
@@ -121,22 +118,7 @@ class ClientWebSocketResponse(Generic[_DecodeText]):
             self._pong_response_cb.cancel()
             self._pong_response_cb = None
 
-    def _on_data_received(self) -> None:
-        if self._heartbeat is None or self._need_heartbeat_reset:
-            return
-        loop = self._loop
-        assert loop is not None
-        # Coalesce multiple chunks received in the same loop tick into a single
-        # heartbeat reset. Resetting immediately per chunk increases timer churn.
-        self._need_heartbeat_reset = True
-        self._heartbeat_reset_handle = loop.call_soon(self._flush_heartbeat_reset)
 
-    def _flush_heartbeat_reset(self) -> None:
-        self._heartbeat_reset_handle = None
-        if not self._need_heartbeat_reset:
-            return
-        self._reset_heartbeat()
-        self._need_heartbeat_reset = False
 
     def _reset_heartbeat(self) -> None:
         if self._heartbeat is None:
@@ -152,74 +134,15 @@ class ClientWebSocketResponse(Generic[_DecodeText]):
         when = calculate_timeout_when(now, self._heartbeat, timeout_ceil_threshold)
         self._heartbeat_when = when
         if self._heartbeat_cb is None:
-            # We do not cancel the previous heartbeat_cb here because
-            # it generates a significant amount of TimerHandle churn
-            # which causes asyncio to rebuild the heap frequently.
-            # Instead _send_heartbeat() will reschedule the next
-            # heartbeat if it fires too early.
             self._heartbeat_cb = loop.call_at(when, self._send_heartbeat)
 
-    def _send_heartbeat(self) -> None:
-        self._heartbeat_cb = None
-
-        # If heartbeat reset is pending (data is being received), skip sending
-        # the ping and let the reset callback handle rescheduling the heartbeat.
-        if self._need_heartbeat_reset:
-            return
-
-        loop = self._loop
-        now = loop.time()
-        if now < self._heartbeat_when:
-            # Heartbeat fired too early, reschedule
-            self._heartbeat_cb = loop.call_at(
-                self._heartbeat_when, self._send_heartbeat
-            )
-            return
-
-        conn = self._conn
-        timeout_ceil_threshold = (
-            conn._connector._timeout_ceil_threshold if conn is not None else 5
-        )
-        when = calculate_timeout_when(now, self._pong_heartbeat, timeout_ceil_threshold)
-        self._cancel_pong_response_cb()
-        self._pong_response_cb = loop.call_at(when, self._pong_not_received)
-
-        coro = self._writer.send_frame(b"", WSMsgType.PING)
-        if sys.version_info >= (3, 12):
-            # Optimization for Python 3.12, try to send the ping
-            # immediately to avoid having to schedule
-            # the task on the event loop.
-            ping_task = asyncio.Task(coro, loop=loop, eager_start=True)
-        else:
-            ping_task = loop.create_task(coro)
-
-        if not ping_task.done():
-            self._ping_task = ping_task
-            ping_task.add_done_callback(self._ping_task_done)
-        else:
-            self._ping_task_done(ping_task)
 
     def _ping_task_done(self, task: "asyncio.Task[None]") -> None:
-        """Callback for when the ping task completes."""
-        if not task.cancelled() and (exc := task.exception()):
-            self._handle_ping_pong_exception(exc)
-        self._ping_task = None
+        pass
 
-    def _pong_not_received(self) -> None:
-        self._handle_ping_pong_exception(
-            ServerTimeoutError(f"No PONG received after {self._pong_heartbeat} seconds")
-        )
 
     def _handle_ping_pong_exception(self, exc: BaseException) -> None:
-        """Handle exceptions raised during ping/pong processing."""
-        if self._closed:
-            return
-        self._set_closed()
-        self._close_code = WSCloseCode.ABNORMAL_CLOSURE
-        self._exception = exc
-        self._response.close()
-        if self._waiting and not self._closing:
-            self._reader.feed_data(WSMessageError(data=exc, extra=None))
+        pass
 
     def _set_closed(self) -> None:
         """Set the connection to closed.
@@ -237,25 +160,13 @@ class ClientWebSocketResponse(Generic[_DecodeText]):
         self._closing = True
         self._cancel_heartbeat()
 
-    @property
-    def closed(self) -> bool:
-        return self._closed
 
-    @property
-    def close_code(self) -> int | None:
-        return self._close_code
 
-    @property
-    def protocol(self) -> str | None:
-        return self._protocol
 
     @property
     def compress(self) -> int:
         return self._compress
 
-    @property
-    def client_notakeover(self) -> bool:
-        return self._client_notakeover
 
     def get_extra_info(self, name: str, default: Any = None) -> Any:
         """extra info from connection transport"""
@@ -318,8 +229,6 @@ class ClientWebSocketResponse(Generic[_DecodeText]):
         await self.send_bytes(dumps(data), compress=compress)
 
     async def close(self, *, code: int = WSCloseCode.OK, message: bytes = b"") -> bool:
-        # we need to break `receive()` cycle first,
-        # `close()` may be called from different task
         if self._waiting and not self._closing:
             assert self._loop is not None
             self._close_wait = self._loop.create_future()
@@ -400,10 +309,6 @@ class ClientWebSocketResponse(Generic[_DecodeText]):
                 self._waiting = True
                 try:
                     if receive_timeout:
-                        # Entering the context manager and creating
-                        # Timeout() object can take almost 50% of the
-                        # run time in this loop so we avoid it if
-                        # there is no read timeout.
                         async with async_timeout.timeout(receive_timeout):
                             msg = await self._reader.read()
                     else:
@@ -420,7 +325,6 @@ class ClientWebSocketResponse(Generic[_DecodeText]):
                 await self.close()
                 return WS_CLOSED_MESSAGE
             except ClientError:
-                # Likely ServerDisconnectedError when connection is lost
                 self._set_closed()
                 self._close_code = WSCloseCode.ABNORMAL_CLOSURE
                 return WS_CLOSED_MESSAGE
@@ -436,14 +340,11 @@ class ClientWebSocketResponse(Generic[_DecodeText]):
                 return WSMessageError(data=exc)
 
             if msg.type not in _INTERNAL_RECEIVE_TYPES:
-                # If its not a close/closing/ping/pong message
-                # we can return it immediately
                 return msg
 
             if msg.type is WSMsgType.CLOSE:
                 self._set_closing()
                 self._close_code = msg.data
-                # Could be closed elsewhere while awaiting reader
                 if not self._closed and self._autoclose:  # type: ignore[redundant-expr]
                     await self.close()
             elif msg.type is WSMsgType.CLOSING:

@@ -140,7 +140,6 @@ _Deco = Callable[[_HandlerType], _HandlerType]
 
 
 class RouteTableDef(Sequence[AbstractRouteDef]):
-    """Route definition table"""
 
     def __init__(self) -> None:
         self._items: list[AbstractRouteDef] = []
@@ -171,9 +170,6 @@ class RouteTableDef(Sequence[AbstractRouteDef]):
         return item in self._items
 
     def route(self, method: str, path: str, **kwargs: Any) -> _Deco:
-        def inner(handler: _HandlerType) -> _HandlerType:
-            self._items.append(RouteDef(method, path, handler, kwargs))
-            return handler
 
         return inner
 

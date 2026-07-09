@@ -1,4 +1,3 @@
-"""Client middleware support."""
 
 from collections.abc import Awaitable, Callable
 from functools import lru_cache
@@ -7,10 +6,8 @@ from .client_reqrep import ClientRequest, ClientResponse
 
 __all__ = ("ClientMiddlewareType", "ClientHandlerType", "build_client_middlewares")
 
-# Type alias for client request handlers - functions that process requests and return responses
 ClientHandlerType = Callable[[ClientRequest], Awaitable[ClientResponse]]
 
-# Type for client middleware - similar to server but uses ClientRequest/ClientResponse
 ClientMiddlewareType = Callable[
     [ClientRequest, ClientHandlerType], Awaitable[ClientResponse]
 ]
@@ -28,25 +25,18 @@ def build_client_middlewares(
 
     This implementation avoids using partial/update_wrapper to minimize overhead.
     """
-    # Optimize for single middleware case
     if len(middlewares) == 1:
         middleware = middlewares[0]
 
-        async def single_middleware_handler(req: ClientRequest) -> ClientResponse:
-            return await middleware(req, handler)
 
         return single_middleware_handler
 
-    # Build the chain for multiple middlewares
     current_handler = handler
 
     for middleware in reversed(middlewares):
-        # Create a new closure that captures the current state
         def make_wrapper(
             mw: ClientMiddlewareType, next_h: ClientHandlerType
         ) -> ClientHandlerType:
-            async def wrapped(req: ClientRequest) -> ClientResponse:
-                return await mw(req, next_h)
 
             return wrapped
 

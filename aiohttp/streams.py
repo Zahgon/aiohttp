@@ -28,7 +28,7 @@ _T = TypeVar("_T")
 
 
 class EofStream(Exception):
-    """eof stream indication."""
+    pass
 
 
 class AsyncStreamIterator(Generic[_T]):
@@ -69,18 +69,6 @@ class ChunkTupleAsyncStreamIterator:
 
 
 class StreamReader:
-    """An enhancement of asyncio.StreamReader.
-
-    Supports asynchronous iteration by line, chunk or as available::
-
-        async for line in reader:
-            ...
-        async for chunk in reader.iter_chunked(1024):
-            ...
-        async for slice in reader.iter_any():
-            ...
-
-    """
 
     __slots__ = (
         "_protocol",
@@ -117,9 +105,6 @@ class StreamReader:
         self._protocol = protocol
         self._low_water = limit
         self._high_water = limit * 2
-        # Use max(4, ...) because there's always at least 1 chunk split remaining
-        # (the current position), so we need low_water >= 2 to allow resume.
-        # limit // 16 gets us a reasonable value of 16k with default 256KiB limit.
         self._high_water_chunks = max(4, limit // 16)
         self._low_water_chunks = self._high_water_chunks // 2
         self._loop = loop
@@ -227,7 +212,6 @@ class StreamReader:
             self._eof_waiter = None
             set_result(waiter, None)
 
-        # At EOF the parser is done, there won't be unprocessed data.
         self._protocol.resume_reading(resume_parser=False)
 
         for cb in self._eof_callbacks:
@@ -246,22 +230,7 @@ class StreamReader:
         """Return True if the buffer is empty and 'feed_eof' was called."""
         return self._eof and not self._buffer
 
-    async def wait_eof(self) -> None:
-        if self._eof:
-            return
 
-        assert self._eof_waiter is None
-        self._eof_waiter = self._loop.create_future()
-        try:
-            await self._eof_waiter
-        finally:
-            self._eof_waiter = None
-
-    @property
-    def total_raw_bytes(self) -> int:
-        if self.total_compressed_bytes is None:
-            return self.total_bytes
-        return self.total_compressed_bytes
 
     def unread_data(self, data: bytes) -> None:
         """rollback reading some data from stream, inserting it to buffer head."""
@@ -317,30 +286,16 @@ class StreamReader:
                 "begin_chunk_receiving first"
             )
 
-        # self._http_chunk_splits contains logical byte offsets from start of
-        # the body transfer. Each offset is the offset of the end of a chunk.
-        # "Logical" means bytes, accessible for a user.
-        # If no chunks containing logical data were received, current position
-        # is difinitely zero.
         pos = self._http_chunk_splits[-1] if self._http_chunk_splits else 0
 
         if self.total_bytes == pos:
-            # We should not add empty chunks here. So we check for that.
-            # Note, when chunked + gzip is used, we can receive a chunk
-            # of compressed data, but that data may not be enough for gzip FSM
-            # to yield any uncompressed data. That's why current position may
-            # not change after receiving a chunk.
             return
 
         self._http_chunk_splits.append(self.total_bytes)
 
-        # If we get too many small chunks before self._high_water is reached, then any
-        # .read() call becomes computationally expensive, and could block the event loop
-        # for too long, hence an additional self._high_water_chunks here.
         if len(self._http_chunk_splits) > self._high_water_chunks:
             self._protocol.pause_reading()
 
-        # wake up readchunk when end of http chunk received
         waiter = self._waiter
         if waiter is not None:
             self._waiter = None
@@ -350,10 +305,6 @@ class StreamReader:
         if not self._protocol.connected:
             raise RuntimeError("Connection closed.")
 
-        # StreamReader uses a future to link the protocol feed_data() method
-        # to a read coroutine. Running two read coroutines at the same time
-        # would have an unexpected behaviour. It would not possible to know
-        # which coroutine would get the next data.
         if self._waiter is not None:
             raise RuntimeError(
                 "%s() called while another coroutine is "
@@ -370,8 +321,6 @@ class StreamReader:
     async def _fire_chunk_received(self, chunk: bytes) -> None:
         cb = self._on_chunk_received
         assert cb is not None
-        # Run under the same per-stream timer that _wait() uses, so a hung
-        # trace handler is bounded by sock_read just like a hung socket read would be.
         with self._timer:
             await cb(chunk)
 
@@ -397,7 +346,6 @@ class StreamReader:
             while self._buffer and not_enough:
                 offset = self._buffer_offset
                 ichar = self._buffer[0].find(separator, offset) + 1
-                # Read from current offset to found separator or to the end.
                 data = self._read_nowait_chunk(
                     ichar - offset + seplen - 1 if ichar else -1
                 )
@@ -427,8 +375,6 @@ class StreamReader:
             return b""
 
         if n < 0:
-            # Reading everything — remove decompression chunk limit.
-            # readany() fires the chunk hook for each block.
             self.set_read_chunk_size(sys.maxsize)
             blocks = []
             while True:
@@ -439,9 +385,6 @@ class StreamReader:
             return b"".join(blocks)
 
         self.set_read_chunk_size(n)
-        # TODO: should be `if` instead of `while`
-        # because waiter maybe triggered on chunk end,
-        # without feeding any data
         while not self._buffer and not self._eof:
             await self._wait("read")
 
@@ -454,9 +397,6 @@ class StreamReader:
         if self._exception is not None:
             raise self._exception
 
-        # TODO: should be `if` instead of `while`
-        # because waiter maybe triggered on chunk end,
-        # without feeding any data
         while not self._buffer and not self._eof:
             await self._wait("readany")
 
@@ -466,80 +406,9 @@ class StreamReader:
         return chunk
 
     async def readchunk(self) -> tuple[bytes, bool]:
-        """Returns a tuple of (data, end_of_http_chunk).
+        pass
 
-        When chunked transfer
-        encoding is used, end_of_http_chunk is a boolean indicating if the end
-        of the data corresponds to the end of a HTTP chunk , otherwise it is
-        always False.
-        """
-        while True:
-            if self._exception is not None:
-                raise self._exception
 
-            while self._http_chunk_splits:
-                pos = self._http_chunk_splits.popleft()
-                if pos == self._cursor:
-                    return (b"", True)
-                if pos > self._cursor:
-                    chunk = self._read_nowait(pos - self._cursor)
-                    if chunk and self._on_chunk_received is not None:
-                        await self._fire_chunk_received(chunk)
-                    return (chunk, True)
-                internal_logger.warning(
-                    "Skipping HTTP chunk end due to data "
-                    "consumption beyond chunk boundary"
-                )
-
-            if self._buffer:
-                chunk = self._read_nowait_chunk(-1)
-                if chunk and self._on_chunk_received is not None:
-                    await self._fire_chunk_received(chunk)
-                return (chunk, False)
-                # return (self._read_nowait(-1), False)
-
-            if self._eof:
-                # Special case for signifying EOF.
-                # (b'', True) is not a final return value actually.
-                return (b"", False)
-
-            await self._wait("readchunk")
-
-    async def readexactly(self, n: int) -> bytes:
-        if self._exception is not None:
-            raise self._exception
-
-        blocks: list[bytes] = []
-        while n > 0:
-            block = await self.read(n)
-            if not block:
-                partial = b"".join(blocks)
-                raise asyncio.IncompleteReadError(partial, len(partial) + n)
-            blocks.append(block)
-            n -= len(block)
-
-        return b"".join(blocks)
-
-    def read_nowait(self, n: int = -1) -> bytes:
-        # default was changed to be consistent with .read(-1)
-        #
-        # I believe the most users don't know about the method and
-        # they are not affected.
-        if self._exception is not None:
-            raise self._exception
-
-        if self._waiter and not self._waiter.done():
-            raise RuntimeError(
-                "Called while some coroutine is waiting for incoming data."
-            )
-
-        chunk = self._read_nowait(n)
-        if chunk and (cb := self._on_chunk_received) is not None:
-            # read_nowait is sync but the hook is async; schedule it so the
-            # observability event still fires.
-            # TODO: Save and await this task.
-            asyncio.create_task(cb(chunk))  # type: ignore[unused-awaitable]
-        return chunk
 
     def _read_nowait_chunk(self, n: int) -> bytes:
         first_buffer = self._buffer[0]
@@ -561,7 +430,6 @@ class StreamReader:
         self._cursor += data_len
 
         chunk_splits = self._http_chunk_splits
-        # Prevent memory leak: drop useless chunk splits
         while chunk_splits and chunk_splits[0] < self._cursor:
             chunk_splits.popleft()
 
@@ -577,8 +445,6 @@ class StreamReader:
         self._timer.assert_timeout()
 
         if n == -1:
-            # Drain only chunks present now; _read_nowait_chunk() can
-            # re-entrantly resume_reading() and refill the buffer.
             count = len(self._buffer)
             if count == 1:
                 return self._read_nowait_chunk(-1)
@@ -603,12 +469,6 @@ class EmptyStreamReader(StreamReader):  # lgtm [py/missing-call-to-init]
         self._read_eof_chunk = False
         self.total_bytes = 0
 
-    # Shadow the inherited slot with a property so the EMPTY_PAYLOAD singleton
-    # can't be polluted with a per-response hook that would leak across
-    # requests. EmptyStreamReader never delivers a chunk anyway.
-    @property
-    def _on_chunk_received(self) -> None:
-        return None
 
     @_on_chunk_received.setter
     def _on_chunk_received(
@@ -644,8 +504,6 @@ class EmptyStreamReader(StreamReader):  # lgtm [py/missing-call-to-init]
     def at_eof(self) -> bool:
         return True
 
-    async def wait_eof(self) -> None:
-        return
 
     def feed_data(self, data: bytes) -> bool:
         return False
@@ -659,30 +517,20 @@ class EmptyStreamReader(StreamReader):  # lgtm [py/missing-call-to-init]
     async def read(self, n: int = -1) -> bytes:
         return b""
 
-    # TODO add async def readuntil
 
     async def readany(self) -> bytes:
         return b""
 
-    async def readchunk(self) -> tuple[bytes, bool]:
-        if not self._read_eof_chunk:
-            self._read_eof_chunk = True
-            return (b"", False)
-
-        return (b"", True)
 
     async def readexactly(self, n: int) -> bytes:
         raise asyncio.IncompleteReadError(b"", n)
 
-    def read_nowait(self, n: int = -1) -> bytes:
-        return b""
 
 
 EMPTY_PAYLOAD: Final[StreamReader] = EmptyStreamReader()
 
 
 class DataQueue(Generic[_T]):
-    """DataQueue is a general-purpose blocking queue with one reader."""
 
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop

@@ -1,4 +1,3 @@
-"""Reader for WebSocket protocol versions 13 and 8."""
 
 import asyncio
 import builtins
@@ -26,8 +25,6 @@ from .models import (
 
 ALLOWED_CLOSE_CODES: Final[set[int]] = {int(i) for i in WSCloseCode}
 
-# States for the reader, used to parse the WebSocket frame
-# integer values are used so they can be cythonized
 READ_HEADER = 1
 READ_PAYLOAD_LENGTH = 2
 READ_PAYLOAD_MASK = 3
@@ -36,7 +33,6 @@ READ_PAYLOAD = 4
 WS_MSG_TYPE_BINARY = WSMsgType.BINARY
 WS_MSG_TYPE_TEXT = WSMsgType.TEXT
 
-# WSMsgType values unpacked so they can by cythonized to ints
 OP_CODE_NOT_SET = -1
 OP_CODE_CONTINUATION = WSMsgType.CONTINUATION.value
 OP_CODE_TEXT = WSMsgType.TEXT.value
@@ -58,10 +54,6 @@ cython_int = int  # Typed to int in Python, but cython with use a signed int in 
 
 
 class WebSocketDataQueue:
-    """WebSocketDataQueue resumes and pauses an underlying stream.
-
-    It is a destination for WebSocket data.
-    """
 
     def __init__(
         self, protocol: BaseProtocol, limit: int, *, loop: asyncio.AbstractEventLoop
@@ -172,9 +164,6 @@ class WebSocketReader:
     def feed_eof(self) -> None:
         self.queue.feed_eof()
 
-    # data can be bytearray on Windows because proactor event loop uses bytearray
-    # and asyncio types this to Union[bytes, bytearray, memoryview] so we need
-    # coerce data to bytes if it is not
     def feed_data(self, data: bytes | bytearray | memoryview) -> tuple[bool, bytes]:
         if type(data) is not bytes:
             data = bytes(data)
@@ -200,16 +189,13 @@ class WebSocketReader:
     ) -> None:
         msg: WSMessage
         if opcode in {OP_CODE_TEXT, OP_CODE_BINARY, OP_CODE_CONTINUATION}:
-            # Validate continuation frames before processing
             if opcode == OP_CODE_CONTINUATION and self._opcode == OP_CODE_NOT_SET:
                 raise WebSocketError(
                     WSCloseCode.PROTOCOL_ERROR,
                     "Continuation frame for non started message",
                 )
 
-            # load text/binary
             if not fin:
-                # got partial frame payload
                 if opcode != OP_CODE_CONTINUATION:
                     self._opcode = opcode
                 self._partial += payload
@@ -219,8 +205,6 @@ class WebSocketReader:
             if opcode == OP_CODE_CONTINUATION:
                 opcode = self._opcode
                 self._opcode = OP_CODE_NOT_SET
-            # previous frame was non finished
-            # we should get continuation opcode
             elif has_partial:
                 raise WebSocketError(
                     WSCloseCode.PROTOCOL_ERROR,
@@ -235,16 +219,9 @@ class WebSocketReader:
             else:
                 assembled_payload = payload
 
-            # Decompress process must to be done after all packets
-            # received.
             if compressed:
                 if not self._decompressobj:
                     self._decompressobj = ZLibDecompressor(suppress_deflate_header=True)
-                # XXX: It's possible that the zlib backend (isal is known to
-                # do this, maybe others too?) will return max_length bytes,
-                # but internally buffer more data such that the payload is
-                # >max_length, so we return one extra byte and if we're able
-                # to do that, then the message is too big.
                 payload_merged = self._decompressobj.decompress_sync(
                     assembled_payload + WS_DEFLATE_TRAILING,
                     (
@@ -273,13 +250,8 @@ class WebSocketReader:
                             WSCloseCode.INVALID_TEXT, "Invalid UTF-8 text message"
                         ) from exc
 
-                    # XXX: The Text and Binary messages here can be a performance
-                    # bottleneck, so we use tuple.__new__ to improve performance.
-                    # This is not type safe, but many tests should fail in
-                    # test_client_ws_functional.py if this is wrong.
                     msg = TUPLE_NEW(WSMessageText, (text, size, "", WS_MSG_TYPE_TEXT))
                 else:
-                    # Return raw bytes for TEXT messages when decode_text=False
                     msg = TUPLE_NEW(
                         WSMessageTextBytes, (payload_merged, size, "", WS_MSG_TYPE_TEXT)
                     )
@@ -339,7 +311,6 @@ class WebSocketReader:
         data_cstr = data
 
         while True:
-            # read header
             if self._state == READ_HEADER:
                 if data_len - start_pos < 2:
                     break
@@ -353,16 +324,6 @@ class WebSocketReader:
                 rsv3 = (first_byte >> 4) & 1
                 opcode = first_byte & 0xF
 
-                # frame-fin = %x0 ; more frames of this message follow
-                #           / %x1 ; final frame of this message
-                # frame-rsv1 = %x0 ;
-                #    1 bit, MUST be 0 unless negotiated otherwise
-                # frame-rsv2 = %x0 ;
-                #    1 bit, MUST be 0 unless negotiated otherwise
-                # frame-rsv3 = %x0 ;
-                #    1 bit, MUST be 0 unless negotiated otherwise
-                #
-                # Remove rsv1 from this test for deflate development
                 if rsv2 or rsv3 or (rsv1 and not self._compress):
                     raise WebSocketError(
                         WSCloseCode.PROTOCOL_ERROR,
@@ -391,17 +352,12 @@ class WebSocketReader:
                 has_mask = (second_byte >> 7) & 1
                 length = second_byte & 0x7F
 
-                # Control frames MUST have a payload
-                # length of 125 bytes or less
                 if opcode > 0x7 and length > 125:
                     raise WebSocketError(
                         WSCloseCode.PROTOCOL_ERROR,
                         "Control frame payload cannot be larger than 125 bytes",
                     )
 
-                # Set compress status if last package is FIN
-                # OR set compress status if this is first fragment
-                # Raise error if not first fragment with rsv1 = 0x1
                 if self._frame_fin or self._compressed == COMPRESSED_NOT_SET:
                     self._compressed = COMPRESSED_TRUE if rsv1 else COMPRESSED_FALSE
                 elif rsv1:
@@ -416,7 +372,6 @@ class WebSocketReader:
                 self._payload_len_flag = length
                 self._state = READ_PAYLOAD_LENGTH
 
-            # read payload length
             if self._state == READ_PAYLOAD_LENGTH:
                 len_flag = self._payload_len_flag
                 if len_flag == 126:
@@ -434,9 +389,6 @@ class WebSocketReader:
                 else:
                     self._payload_bytes_to_read = len_flag
 
-                # Reject oversized data frames before buffering any payload
-                # bytes. Control frames are capped at 125 bytes (checked in
-                # READ_HEADER) so only text/binary/continuation need this.
                 if self._max_msg_size and self._frame_opcode in {
                     OP_CODE_TEXT,
                     OP_CODE_BINARY,
@@ -452,7 +404,6 @@ class WebSocketReader:
 
                 self._state = READ_PAYLOAD_MASK if self._has_mask else READ_PAYLOAD
 
-            # read payload mask
             if self._state == READ_PAYLOAD_MASK:
                 if data_len - start_pos < 4:
                     break
@@ -475,14 +426,11 @@ class WebSocketReader:
                 start_pos = f_end_pos
 
                 if self._payload_bytes_to_read != 0:
-                    # If we don't have a complete frame, we need to save the
-                    # data for the next call to feed_data.
                     self._payload_fragments.append(data_cstr[f_start_pos:f_end_pos])
                     break
 
                 payload: bytes | bytearray
                 if had_fragments:
-                    # We have to join the payload fragments get the payload
                     self._payload_fragments.append(data_cstr[f_start_pos:f_end_pos])
                     if self._has_mask:
                         assert self._frame_mask is not None
@@ -496,9 +444,6 @@ class WebSocketReader:
                     assert self._frame_mask is not None
                     payload_bytearray = data_cstr[f_start_pos:f_end_pos]  # type: ignore[assignment]
                     if type(payload_bytearray) is not bytearray:  # pragma: no branch
-                        # Cython will do the conversion for us
-                        # but we need to do it for Python and we
-                        # will always get here in Python
                         payload_bytearray = bytearray(payload_bytearray)
                     websocket_mask(self._frame_mask, payload_bytearray)
                     payload = payload_bytearray
@@ -511,5 +456,4 @@ class WebSocketReader:
                 self._frame_payload_len = 0
                 self._state = READ_HEADER
 
-        # XXX: Cython needs slices to be bounded, so we can't omit the slice end here.
         self._tail = data_cstr[start_pos:data_len] if start_pos < data_len else b""

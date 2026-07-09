@@ -1,4 +1,3 @@
-"""Low level HTTP server."""
 
 import asyncio
 import warnings
@@ -74,44 +73,9 @@ class Server(Generic[_Request]):
         self.request_factory = request_factory or self._make_request  # type: ignore[assignment]
         self.handler_cancellation = handler_cancellation
 
-    @property
-    def connections(self) -> list[RequestHandler[_Request]]:
-        return list(self._connections.keys())
 
-    def connection_made(
-        self, handler: RequestHandler[_Request], transport: asyncio.Transport
-    ) -> None:
-        self._connections[handler] = transport
 
-    def connection_lost(
-        self, handler: RequestHandler[_Request], exc: BaseException | None = None
-    ) -> None:
-        if handler in self._connections:
-            if handler._task_handler:
-                handler._task_handler.add_done_callback(
-                    lambda f: self._connections.pop(handler, None)
-                )
-            else:
-                del self._connections[handler]
 
-    def _make_request(
-        self,
-        message: RawRequestMessage,
-        payload: StreamReader,
-        protocol: RequestHandler[BaseRequest],
-        writer: AbstractStreamWriter,
-        task: "asyncio.Task[None]",
-        pre_handler_error: HTTPBadRequest | None,
-    ) -> BaseRequest:
-        return BaseRequest(
-            message,
-            payload,
-            protocol,
-            writer,
-            task,
-            self._loop,
-            pre_handler_error=pre_handler_error,
-        )
 
     def pre_shutdown(self) -> None:
         for conn in self._connections:
@@ -126,7 +90,6 @@ class Server(Generic[_Request]):
         try:
             return RequestHandler(self, loop=self._loop, **self._kwargs)
         except TypeError:
-            # Failsafe creation: remove all custom handler_args
             kwargs = {
                 k: v
                 for k, v in self._kwargs.items()

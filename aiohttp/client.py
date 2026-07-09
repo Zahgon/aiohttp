@@ -1,4 +1,3 @@
-"""HTTP Client for asyncio."""
 
 import asyncio
 import base64
@@ -109,7 +108,6 @@ from .typedefs import (
 )
 
 __all__ = (
-    # client_exceptions
     "ClientConnectionError",
     "ClientConnectionResetError",
     "ClientConnectorCertificateError",
@@ -138,19 +136,15 @@ __all__ = (
     "SocketTimeoutError",
     "TooManyRedirects",
     "WSServerHandshakeError",
-    # client_reqrep
     "ClientRequest",
     "ClientResponse",
     "Fingerprint",
     "RequestInfo",
-    # connector
     "BaseConnector",
     "TCPConnector",
     "UnixConnector",
     "NamedPipeConnector",
-    # client_ws
     "ClientWebSocketResponse",
-    # client
     "ClientSession",
     "ClientTimeout",
     "ClientWSTimeout",
@@ -215,7 +209,6 @@ class _WSConnectOptions(TypedDict, total=False):
     max_msg_size: int
 
 
-# https://www.rfc-editor.org/rfc/rfc9110#section-9.2.2
 IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE", "PUT", "DELETE"})
 
 _RetType_co = TypeVar(
@@ -226,34 +219,10 @@ _RetType_co = TypeVar(
 _CharsetResolver = Callable[[ClientResponse, bytes], str]
 
 
-# Module-level (not a closure) so it has a stable identity for the
-# ``_cached_build_client_middlewares`` cache key.
-async def _connect_and_send_request(req: ClientRequest) -> ClientResponse:
-    connector = req._session._connector
-    assert connector is not None
-    try:
-        conn = await connector.connect(req, traces=req._traces, timeout=req._timeout)
-    except asyncio.TimeoutError as exc:
-        raise ConnectionTimeoutError(f"Connection timeout to host {req.url}") from exc
-
-    assert conn.protocol is not None
-    conn.protocol.set_response_params(**req._response_params)
-    try:
-        resp = await req._send(conn)
-        try:
-            await resp.start(conn)
-        except BaseException:
-            resp.close()
-            raise
-    except BaseException:
-        conn.close()
-        raise
-    return resp
 
 
 @final
 class ClientSession:
-    """First-class interface for making HTTP requests."""
 
     __slots__ = (
         "_base_url",
@@ -318,8 +287,6 @@ class ClientSession:
         middlewares: Sequence[ClientMiddlewareType] = (),
         ssl_shutdown_timeout: _SENTINEL | None | float = sentinel,
     ) -> None:
-        # We initialise _connector to None immediately, as it's referenced in __del__()
-        # and could cause issues if an exception occurs during initialisation.
         self._connector: BaseConnector | None = None
         if base_url is None or isinstance(base_url, URL):
             self._base_url: URL | None = base_url
@@ -351,8 +318,6 @@ class ClientSession:
 
         if connector is None:
             connector = TCPConnector(ssl_shutdown_timeout=ssl_shutdown_timeout)
-        # Initialize these three attrs before raising any exception,
-        # they are used in __del__
         self._connector = connector
         self._loop = loop
         if loop.get_debug():
@@ -385,7 +350,6 @@ class ClientSession:
         self._max_field_size = max_field_size
         self._max_headers = max_headers
 
-        # Convert to list of tuples
         if headers:
             real_headers: CIMultiDict[str] = CIMultiDict(headers)
         else:
@@ -483,9 +447,6 @@ class ClientSession:
         max_headers: int | None = None,
         middlewares: Sequence[ClientMiddlewareType] | None = None,
     ) -> ClientResponse:
-        # NOTE: timeout clamps existing connect and read timeouts.  We cannot
-        # set the default to None because we need to detect if the user wants
-        # to use the existing timeouts by setting timeout to None.
 
         if self.closed:
             raise RuntimeError("Session is closed")
@@ -513,7 +474,6 @@ class ClientSession:
         version = self._version
         params = params or {}
 
-        # Merge with default headers and transform to CIMultiDict
         headers = self._prepare_headers(headers)
 
         try:
@@ -552,8 +512,6 @@ class ClientSession:
             real_timeout: ClientTimeout = self._timeout
         else:
             real_timeout = timeout
-        # timeout is cumulative for all request operations
-        # (request, redirects, responses, data consuming)
         tm = TimeoutHandle(
             self._loop, real_timeout.total, ceil_threshold=real_timeout.ceil_threshold
         )
@@ -590,15 +548,12 @@ class ClientSession:
         req: ClientRequest | None = None
         try:
             with timer:
-                # https://www.rfc-editor.org/rfc/rfc9112.html#name-retrying-requests
                 retry_persistent_connection = (
                     self._retry_connection and method in IDEMPOTENT_METHODS
                 )
                 while True:
                     url, auth_from_url = strip_auth_from_url(url)
                     if not url.raw_host:
-                        # NOTE: Bail early, otherwise, causes `InvalidURL` through
-                        # NOTE: `self._request_class()` below.
                         err_exc_cls = (
                             InvalidUrlRedirectClientError
                             if redirects
@@ -607,10 +562,6 @@ class ClientSession:
                         raise err_exc_cls(url)
 
                     if auth_from_url is not None:
-                        # URL-embedded credentials override any Authorization
-                        # header already present (e.g. carried from a previous
-                        # redirect). On the initial request, refuse to silently
-                        # shadow an explicit Authorization header.
                         if not history and hdrs.AUTHORIZATION in headers:
                             raise ValueError(
                                 "Cannot combine AUTHORIZATION header with "
@@ -622,7 +573,6 @@ class ClientSession:
                         and url.host is not None
                         and hdrs.AUTHORIZATION not in headers
                     ):
-                        # Fall back to ~/.netrc credentials when trust_env is set.
                         netrc_auth = await self._loop.run_in_executor(
                             None, self._get_netrc_auth, url.host
                         )
@@ -645,8 +595,6 @@ class ClientSession:
                     if proxy is not None:
                         proxy_ = URL(proxy)
                     elif self._trust_env:
-                        # Re-resolve per iteration; drop stale env-proxy auth so
-                        # a redirect that switches proxies can't leak credentials.
                         resolved_proxy_headers = None
                         with suppress(LookupError):
                             proxy_, env_proxy_auth = await asyncio.to_thread(
@@ -696,7 +644,6 @@ class ClientSession:
                         trust_env=self.trust_env,
                     )
 
-                    # Apply middleware (if any) - per-request middleware overrides session middleware
                     effective_middlewares = (
                         self._middlewares if middlewares is None else tuple(middlewares)
                     )
@@ -710,7 +657,6 @@ class ClientSession:
 
                     try:
                         resp = await handler(req)
-                    # Client connector errors should not be retried
                     except (
                         ConnectionTimeoutError,
                         ClientConnectorError,
@@ -730,13 +676,11 @@ class ClientSession:
                             raise
                         raise ClientOSError(*exc.args) from exc
 
-                    # Update cookies from raw headers to preserve duplicates
                     if resp._raw_cookie_headers:
                         self._cookie_jar.update_cookies_from_headers(
                             resp._raw_cookie_headers, resp.url
                         )
 
-                    # redirects
                     if resp.status in (301, 302, 303, 307, 308) and allow_redirects:
                         for trace in traces:
                             await trace.send_request_redirect(
@@ -753,8 +697,6 @@ class ClientSession:
                                 history[0].request_info, tuple(history)
                             )
 
-                        # For 301 and 302, mimic IE, now changed in RFC
-                        # https://github.com/kennethreitz/requests/pull/269
                         if (resp.status == 303 and resp.method != hdrs.METH_HEAD) or (
                             resp.status in (301, 302) and resp.method == hdrs.METH_POST
                         ):
@@ -763,14 +705,6 @@ class ClientSession:
                             if headers.get(hdrs.CONTENT_LENGTH):
                                 headers.pop(hdrs.CONTENT_LENGTH)
                         else:
-                            # For 307/308, always preserve the request body
-                            # For 301/302 with non-POST methods, preserve the request body
-                            # https://www.rfc-editor.org/rfc/rfc9110#section-15.4.3-3.1
-                            # Use the existing payload to avoid recreating it from
-                            # a potentially consumed file.
-                            #
-                            # If the payload is already consumed and cannot be replayed,
-                            # fail fast instead of silently sending an empty body.
                             if req._body.consumed:
                                 resp.close()
                                 raise ClientPayloadError(
@@ -784,11 +718,8 @@ class ClientSession:
                             hdrs.URI
                         )
                         if r_url is None:
-                            # see github.com/aio-libs/aiohttp/issues/2022
                             break
                         else:
-                            # reading from correct redirection
-                            # response is forbidden
                             resp.release()
 
                         try:
@@ -839,7 +770,6 @@ class ClientSession:
 
             if req._body is not None:
                 await req._body.close()
-            # check response status
             if raise_for_status is None:
                 raise_for_status = self._raise_for_status
 
@@ -848,7 +778,6 @@ class ClientSession:
             elif raise_for_status:
                 resp.raise_for_status()
 
-            # register connection
             if handle is not None:
                 if resp.connection is not None:
                     resp.connection.add_callback(handle.cancel)
@@ -864,7 +793,6 @@ class ClientSession:
             return resp
 
         except BaseException as e:
-            # cleanup timer
             tm.close()
             if handle:
                 handle.cancel()
@@ -1060,7 +988,6 @@ class ClientSession:
                 f"got {ssl!r} instead."
             )
 
-        # send request
         resp = await self.request(
             method,
             url,
@@ -1074,7 +1001,6 @@ class ClientSession:
         )
 
         try:
-            # check handshake
             if resp.status != 101:
                 raise WSServerHandshakeError(
                     resp.request_info,
@@ -1102,7 +1028,6 @@ class ClientSession:
                     headers=resp.headers,
                 )
 
-            # key calculation
             r_key = resp.headers.get(hdrs.SEC_WEBSOCKET_ACCEPT, "")
             match = base64.b64encode(hashlib.sha1(sec_key + WS_KEY).digest()).decode()
             if r_key != match:
@@ -1114,7 +1039,6 @@ class ClientSession:
                     headers=resp.headers,
                 )
 
-            # websocket protocol
             protocol = None
             if protocols and hdrs.SEC_WEBSOCKET_PROTOCOL in resp.headers:
                 resp_protocols = [
@@ -1127,7 +1051,6 @@ class ClientSession:
                         protocol = proto
                         break
 
-            # websocket compress
             notakeover = False
             if compress:
                 compress_hdrs = resp.headers.get(hdrs.SEC_WEBSOCKET_EXTENSIONS)
@@ -1151,10 +1074,7 @@ class ClientSession:
             conn_proto = conn.protocol
             assert conn_proto is not None
 
-            # For WS connection the read_timeout must be either ws_timeout.ws_receive or greater
-            # None == no timeout, i.e. infinite timeout, so None is the max timeout possible
             if ws_timeout.ws_receive is None:
-                # Reset regardless
                 conn_proto.read_timeout = None
             elif conn_proto.read_timeout is not None:
                 conn_proto.read_timeout = max(
@@ -1200,7 +1120,6 @@ class ClientSession:
 
     def _prepare_headers(self, headers: LooseHeaders | None) -> "CIMultiDict[str]":
         """Add default headers and transform it to CIMultiDict"""
-        # Convert headers to MultiDict
         result = CIMultiDict(self._default_headers)
         if headers:
             if not isinstance(headers, (MultiDictProxy, MultiDict)):
@@ -1215,16 +1134,7 @@ class ClientSession:
         return result
 
     def _get_netrc_auth(self, host: str) -> str | None:
-        """Return an ``Authorization`` header value for ``host`` from netrc.
-
-        Designed to be called in an executor to avoid blocking I/O on the
-        event loop.
-        """
-        netrc_obj = netrc_from_env()
-        try:
-            return _auth_header_from_netrc(netrc_obj, host)
-        except LookupError:
-            return None
+        pass
 
     if sys.version_info >= (3, 11) and TYPE_CHECKING:
 
@@ -1344,31 +1254,23 @@ class ClientSession:
 
     @property
     def closed(self) -> bool:
-        """Is client session closed.
-
-        A readonly property.
-        """
-        return self._connector is None or self._connector.closed
+        pass
 
     @property
     def connector(self) -> BaseConnector | None:
-        """Connector instance used for the session."""
-        return self._connector
+        pass
 
     @property
     def cookie_jar(self) -> AbstractCookieJar:
-        """The session cookies."""
-        return self._cookie_jar
+        pass
 
     @property
     def version(self) -> tuple[int, int]:
-        """The session HTTP protocol version."""
-        return self._version
+        pass
 
     @property
     def requote_redirect_url(self) -> bool:
-        """Do URL requoting on redirection handling."""
-        return self._requote_redirect_url
+        pass
 
     @property
     def timeout(self) -> ClientTimeout:
@@ -1377,23 +1279,19 @@ class ClientSession:
 
     @property
     def headers(self) -> "CIMultiDict[str]":
-        """The default headers of the client session."""
-        return self._default_headers
+        pass
 
     @property
     def skip_auto_headers(self) -> frozenset[istr]:
-        """Headers for which autogeneration should be skipped"""
-        return self._skip_auto_headers
+        pass
 
     @property
     def json_serialize(self) -> JSONEncoder:
-        """Json serializer callable"""
-        return self._json_serialize
+        pass
 
     @property
     def connector_owner(self) -> bool:
-        """Should connector be closed on session closing"""
-        return self._connector_owner
+        pass
 
     @property
     def raise_for_status(
@@ -1404,30 +1302,18 @@ class ClientSession:
 
     @property
     def auto_decompress(self) -> bool:
-        """Should the body response be automatically decompressed."""
-        return self._auto_decompress
+        pass
 
     @property
     def trust_env(self) -> bool:
-        """
-        Should proxies information from environment or netrc be trusted.
-
-        Information is from HTTP_PROXY / HTTPS_PROXY environment variables
-        or ~/.netrc file if present.
-        """
-        return self._trust_env
+        pass
 
     @property
     def trace_configs(self) -> list[TraceConfig[Any]]:
-        """A list of TraceConfig instances used for client tracing"""
-        return self._trace_configs
+        pass
 
     def detach(self) -> None:
-        """Detach connector from session without closing the former.
-
-        Session is switched to closed state anyway.
-        """
-        self._connector = None
+        pass
 
     async def __aenter__(self) -> "ClientSession":
         return self
@@ -1452,8 +1338,6 @@ class _BaseRequestContextManager(
     def send(self, arg: None) -> asyncio.Future[Any]:
         return self._coro.send(arg)
 
-    def throw(self, *args: Any, **kwargs: Any) -> asyncio.Future[Any]:
-        return self._coro.throw(*args, **kwargs)
 
     def close(self) -> None:
         return self._coro.close()

@@ -56,14 +56,7 @@ _Resource = TypeVar("_Resource", bound=AbstractResource)
 def _build_middlewares(
     handler: Handler, apps: tuple["Application", ...]
 ) -> Callable[[Request], Awaitable[StreamResponse]]:
-    """Apply middlewares to handler."""
-    # The slice is to reverse the order of the apps
-    # so they are applied in the order they were added
-    for app in apps[::-1]:
-        assert app.pre_frozen, "middleware handlers are not ready"
-        for m in app._middlewares_handlers:
-            handler = update_wrapper(partial(m, handler=handler), handler)
-    return handler
+    pass
 
 
 _cached_build_middleware = lru_cache(maxsize=1024)(_build_middlewares)
@@ -112,9 +105,7 @@ class Application(MutableMapping[str | AppKey[Any], Any]):
 
         self._middlewares: _Middlewares = FrozenList(middlewares)
 
-        # initialized on freezing
         self._middlewares_handlers: _MiddlewaresHandlers = tuple()
-        # initialized on freezing
         self._run_middlewares: bool | None = None
 
         self._state: dict[AppKey[Any] | str, object] = {}
@@ -136,7 +127,6 @@ class Application(MutableMapping[str | AppKey[Any], Any]):
             f"Inheritance class {cls.__name__} from web.Application is forbidden"
         )
 
-    # MutableMapping API
 
     def __eq__(self, other: object) -> bool:
         return self is other
@@ -150,11 +140,7 @@ class Application(MutableMapping[str | AppKey[Any], Any]):
     def __getitem__(self, key: str | AppKey[_T]) -> Any:
         return self._state[key]
 
-    def _check_frozen(self) -> None:
-        if self._frozen:
-            raise RuntimeError(
-                "Changing state of started or joined application is forbidden"
-            )
+    pass
 
     @overload  # type: ignore[override]
     def __setitem__(self, key: AppKey[_T], value: _T) -> None: ...
@@ -199,17 +185,9 @@ class Application(MutableMapping[str | AppKey[Any], Any]):
     def get(self, key: str | AppKey[_T], default: Any = None) -> Any:
         return self._state.get(key, default)
 
-    ########
-    def _set_loop(self, loop: asyncio.AbstractEventLoop | None) -> None:
-        warnings.warn(
-            "_set_loop() is no-op since 4.0 and scheduled for removal in 5.0",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+    pass
 
-    @property
-    def pre_frozen(self) -> bool:
-        return self._pre_frozen
+    pass
 
     def pre_freeze(self) -> None:
         if self._pre_frozen:
@@ -225,20 +203,13 @@ class Application(MutableMapping[str | AppKey[Any], Any]):
         self._on_cleanup.freeze()
         self._middlewares_handlers = tuple(self._prepare_middleware())
 
-        # If current app and any subapp do not have middlewares avoid run all
-        # of the code footprint that it implies, which have a middleware
-        # hardcoded per app that sets up the current_app attribute. If no
-        # middlewares are configured the handler will receive the proper
-        # current_app without needing all of this code.
         self._run_middlewares = True if self.middlewares else False
 
         for subapp in self._subapps:
             subapp.pre_freeze()
             self._run_middlewares = self._run_middlewares or subapp._run_middlewares
 
-    @property
-    def frozen(self) -> bool:
-        return self._frozen
+    pass
 
     def freeze(self) -> None:
         if self._frozen:
@@ -258,83 +229,29 @@ class Application(MutableMapping[str | AppKey[Any], Any]):
         )
         return asyncio.get_running_loop().get_debug()
 
-    def _reg_subapp_signals(self, subapp: "Application") -> None:
-        def reg_handler(signame: str) -> None:
-            subsig = getattr(subapp, signame)
+    pass
 
-            async def handler(app: "Application") -> None:
-                await subsig.send(subapp)
+    pass
 
-            appsig = getattr(self, signame)
-            appsig.append(handler)
+    pass
 
-        reg_handler("on_startup")
-        reg_handler("on_shutdown")
-        reg_handler("on_cleanup")
+    pass
 
-    def add_subapp(self, prefix: str, subapp: "Application") -> PrefixedSubAppResource:
-        if not isinstance(prefix, str):
-            raise TypeError("Prefix must be str")
-        prefix = prefix.rstrip("/")
-        if not prefix:
-            raise ValueError("Prefix cannot be empty")
-        factory = partial(PrefixedSubAppResource, prefix, subapp)
-        return self._add_subapp(factory, subapp)
+    pass
 
-    def _add_subapp(
-        self, resource_factory: Callable[[], _Resource], subapp: "Application"
-    ) -> _Resource:
-        if self.frozen:
-            raise RuntimeError("Cannot add sub application to frozen application")
-        if subapp.frozen:
-            raise RuntimeError("Cannot add frozen application")
-        resource = resource_factory()
-        self.router.register_resource(resource)
-        self._reg_subapp_signals(subapp)
-        self._subapps.append(subapp)
-        subapp.pre_freeze()
-        return resource
+    pass
 
-    def add_domain(self, domain: str, subapp: "Application") -> MatchedSubAppResource:
-        if not isinstance(domain, str):
-            raise TypeError("Domain must be str")
-        elif "*" in domain:
-            rule: Domain = MaskDomain(domain)
-        else:
-            rule = Domain(domain)
-        factory = partial(MatchedSubAppResource, rule, subapp)
-        return self._add_subapp(factory, subapp)
+    pass
 
-    def add_routes(self, routes: Iterable[AbstractRouteDef]) -> list[AbstractRoute]:
-        return self.router.add_routes(routes)
+    pass
 
-    @property
-    def on_response_prepare(self) -> _RespPrepareSignal:
-        return self._on_response_prepare
+    pass
 
-    @property
-    def on_startup(self) -> _AppSignal:
-        return self._on_startup
+    pass
 
-    @property
-    def on_shutdown(self) -> _AppSignal:
-        return self._on_shutdown
+    pass
 
-    @property
-    def on_cleanup(self) -> _AppSignal:
-        return self._on_cleanup
-
-    @property
-    def cleanup_ctx(self) -> "CleanupContext":
-        return self._cleanup_ctx
-
-    @property
-    def router(self) -> UrlDispatcher:
-        return self._router
-
-    @property
-    def middlewares(self) -> _Middlewares:
-        return self._middlewares
+    pass
 
     async def startup(self) -> None:
         """Causes on_startup signal
@@ -358,42 +275,13 @@ class Application(MutableMapping[str | AppKey[Any], Any]):
         if self.on_cleanup.frozen:
             await self.on_cleanup.send(self)
         else:
-            # If an exception occurs in startup, ensure cleanup contexts are completed.
             await self._cleanup_ctx._on_cleanup(self)
 
     def _prepare_middleware(self) -> Iterator[Middleware]:
         yield from reversed(self._middlewares)
         yield _fix_request_current_app(self)
 
-    async def _handle(self, request: Request) -> StreamResponse:
-        match_info: UrlMappingMatchInfo
-        if (err := request._pre_handler_error) is not None:
-            match_info = MatchInfoError(err)
-        else:
-            match_info = await self._router.resolve(request)
-        match_info.add_app(self)
-        match_info.freeze()
-
-        request._match_info = match_info
-
-        if request.headers.get(hdrs.EXPECT):
-            resp = await match_info.expect_handler(request)
-            await request.writer.drain()
-            if resp is not None:
-                return resp
-
-        handler = match_info.handler
-
-        if self._run_middlewares:
-            # If its a SystemRoute, don't cache building the middlewares since
-            # they are constructed for every MatchInfoError as a new handler
-            # is made each time.
-            if isinstance(match_info.route, SystemRoute):
-                handler = _build_middlewares(handler, match_info.apps)
-            else:
-                handler = _cached_build_middleware(handler, match_info.apps)
-
-        return await handler(request)
+    pass
 
     def __call__(self) -> "Application":
         """gunicorn compatibility"""
@@ -407,9 +295,7 @@ class Application(MutableMapping[str | AppKey[Any], Any]):
 
 
 class CleanupError(RuntimeError):
-    @property
-    def exceptions(self) -> list[BaseException]:
-        return cast(list[BaseException], self.args[1])
+    pass
 
 
 _CleanupContextCallable = (
@@ -423,15 +309,7 @@ class CleanupContext(FrozenList[_CleanupContextCallable]):
         super().__init__()
         self._exits: list[AbstractAsyncContextManager[None]] = []
 
-    async def _on_startup(self, app: Application) -> None:
-        for cb in self:
-            ctx = cb(app)
-
-            if not isinstance(ctx, AbstractAsyncContextManager):
-                ctx = asynccontextmanager(cb)(app)  # type: ignore[arg-type]
-
-            await ctx.__aenter__()
-            self._exits.append(ctx)
+    pass
 
     async def _on_cleanup(self, app: Application) -> None:
         errors = []

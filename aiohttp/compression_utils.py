@@ -35,7 +35,6 @@ except ImportError:
 
 MAX_SYNC_CHUNK_SIZE = 4096
 
-# Unlimited decompression constants - different libraries use different conventions
 ZLIB_MAX_LENGTH_UNLIMITED = 0  # zlib uses 0 to mean unlimited
 ZSTD_MAX_LENGTH_UNLIMITED = -1  # zstd uses -1 to mean unlimited
 
@@ -97,29 +96,11 @@ class ZLibBackendWrapper:
     def __init__(self, _zlib_backend: ZLibBackendProtocol):
         self._zlib_backend: ZLibBackendProtocol = _zlib_backend
 
-    @property
-    def name(self) -> str:
-        return getattr(self._zlib_backend, "__name__", "undefined")
 
-    @property
-    def MAX_WBITS(self) -> int:
-        return self._zlib_backend.MAX_WBITS
 
-    @property
-    def Z_FULL_FLUSH(self) -> int:
-        return self._zlib_backend.Z_FULL_FLUSH
 
-    @property
-    def Z_SYNC_FLUSH(self) -> int:
-        return self._zlib_backend.Z_SYNC_FLUSH
 
-    @property
-    def Z_BEST_SPEED(self) -> int:
-        return self._zlib_backend.Z_BEST_SPEED
 
-    @property
-    def Z_FINISH(self) -> int:
-        return self._zlib_backend.Z_FINISH
 
     def compressobj(self, *args: Any, **kwargs: Any) -> ZLibCompressObjProtocol:
         return self._zlib_backend.compressobj(*args, **kwargs)
@@ -133,7 +114,6 @@ class ZLibBackendWrapper:
     def decompress(self, data: Buffer, *args: Any, **kwargs: Any) -> bytes:
         return self._zlib_backend.decompress(data, *args, **kwargs)
 
-    # Everything not explicitly listed in the Protocol we just pass through
     def __getattr__(self, attrname: str) -> Any:
         return getattr(self._zlib_backend, attrname)
 
@@ -238,7 +218,6 @@ class ZLibCompressor:
         For cancellation-safe compression (e.g., WebSocket), the caller MUST wrap
         compress() + flush() + send operations in a shield and lock to ensure atomicity.
         """
-        # For large payloads, offload compression to executor to avoid blocking event loop
         should_use_executor = (
             self._max_sync_chunk_size is not None
             and len(data) > self._max_sync_chunk_size
@@ -289,12 +268,8 @@ class ZLibDecompressor(DecompressionBaseHandler):
         result = self._decompressor.decompress(
             self._decompressor.unconsumed_tail + data, max_length
         )
-        # Only way to know that isal has no further data is checking we get no output
         self._last_empty = result == b""
 
-        # Handle concatenated gzip/deflate streams (multi-member).
-        # After a member ends, unused_data holds the start of the next member.
-        # Create a fresh decompressor for each subsequent member.
         while self._decompressor.eof and self._decompressor.unused_data:
             unused = self._decompressor.unused_data
             self._decompressor = self._zlib_backend.decompressobj(wbits=self._mode)
@@ -307,10 +282,6 @@ class ZLibDecompressor(DecompressionBaseHandler):
             self._last_empty = chunk == b""
             result += chunk
 
-        # Member ended exactly at chunk boundary — no unused_data, but the
-        # next feed_data() call would fail on the spent decompressor.
-        # Only reset for gzip; deflate's feed_eof() relies on eof=True to
-        # confirm the stream is complete.
         if self._decompressor.eof and self._mode > self._zlib_backend.MAX_WBITS:
             self._decompressor = self._zlib_backend.decompressobj(wbits=self._mode)
 
@@ -323,23 +294,10 @@ class ZLibDecompressor(DecompressionBaseHandler):
             else self._decompressor.flush()
         )
 
-    @property
-    def data_available(self) -> bool:
-        return (
-            bool(self._decompressor.unconsumed_tail)
-            or not self._last_empty
-            or self._pending_unused_data is not None
-        )
 
-    @property
-    def eof(self) -> bool:
-        return self._decompressor.eof
 
 
 class BrotliDecompressor(DecompressionBaseHandler):
-    # Supports both 'brotlipy' and 'Brotli' packages
-    # since they share an import name. The top branches
-    # are for 'brotlipy' and bottom branches for 'Brotli'
     def __init__(
         self,
         executor: Executor | None = None,
@@ -369,7 +327,6 @@ class BrotliDecompressor(DecompressionBaseHandler):
                 result = cast(bytes, self._obj.process(data))
             else:
                 result = cast(bytes, self._obj.process(data, max_length))
-        # Only way to know that brotli has no further data is checking we get no output
         self._last_empty = result == b""
         return result
 
@@ -379,9 +336,6 @@ class BrotliDecompressor(DecompressionBaseHandler):
             return cast(bytes, self._obj.flush())
         return b""
 
-    @property
-    def data_available(self) -> bool:
-        return not self._obj.is_finished() and not self._last_empty
 
 
 class ZSTDDecompressor(DecompressionBaseHandler):
@@ -402,8 +356,6 @@ class ZSTDDecompressor(DecompressionBaseHandler):
     def decompress_sync(
         self, data: bytes, max_length: int = ZLIB_MAX_LENGTH_UNLIMITED
     ) -> bytes:
-        # zstd uses -1 for unlimited, while zlib uses 0 for unlimited
-        # Convert the zlib convention (0=unlimited) to zstd convention (-1=unlimited)
         zstd_max_length = (
             ZSTD_MAX_LENGTH_UNLIMITED
             if max_length == ZLIB_MAX_LENGTH_UNLIMITED
@@ -414,11 +366,6 @@ class ZSTDDecompressor(DecompressionBaseHandler):
             self._pending_unused_data = None
         result = self._obj.decompress(data, zstd_max_length)
 
-        # Handle multi-frame zstd streams.
-        # https://datatracker.ietf.org/doc/html/rfc8878#section-3.1.1
-        # ZstdDecompressor handles one frame only. When a frame ends,
-        # eof becomes True and any trailing data goes to unused_data.
-        # We create a fresh decompressor to continue with the next frame.
         while self._obj.eof and self._obj.unused_data:
             unused_data = self._obj.unused_data
             self._obj = ZstdDecompressor()
@@ -429,9 +376,6 @@ class ZSTDDecompressor(DecompressionBaseHandler):
                     break
             result += self._obj.decompress(unused_data, zstd_max_length)
 
-        # Frame ended exactly at chunk boundary — no unused_data, but the
-        # next feed_data() call would fail on the spent decompressor.
-        # Prepare a fresh one for the next chunk.
         if self._obj.eof:
             self._obj = ZstdDecompressor()
 
@@ -440,8 +384,3 @@ class ZSTDDecompressor(DecompressionBaseHandler):
     def flush(self) -> bytes:
         return b""
 
-    @property
-    def data_available(self) -> bool:
-        return (
-            not self._obj.needs_input and not self._obj.eof
-        ) or self._pending_unused_data is not None

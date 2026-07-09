@@ -42,7 +42,6 @@ class _Factory(Protocol[_T]):
 
 
 class TraceConfig(Generic[_T]):
-    """First-class used to trace requests launched via ClientSession objects."""
 
     @overload
     def __init__(self: "TraceConfig[SimpleNamespace]") -> None: ...
@@ -122,98 +121,25 @@ class TraceConfig(Generic[_T]):
         self._on_dns_cache_miss.freeze()
         self._on_request_headers_sent.freeze()
 
-    @property
-    def on_request_start(self) -> "_TracingSignal[_T, TraceRequestStartParams]":
-        return self._on_request_start
 
-    @property
-    def on_request_chunk_sent(
-        self,
-    ) -> "_TracingSignal[_T, TraceRequestChunkSentParams]":
-        return self._on_request_chunk_sent
 
-    @property
-    def on_response_chunk_received(
-        self,
-    ) -> "_TracingSignal[_T, TraceResponseChunkReceivedParams]":
-        return self._on_response_chunk_received
 
-    @property
-    def on_request_end(self) -> "_TracingSignal[_T, TraceRequestEndParams]":
-        return self._on_request_end
 
-    @property
-    def on_request_exception(
-        self,
-    ) -> "_TracingSignal[_T, TraceRequestExceptionParams]":
-        return self._on_request_exception
 
-    @property
-    def on_request_redirect(
-        self,
-    ) -> "_TracingSignal[_T, TraceRequestRedirectParams]":
-        return self._on_request_redirect
 
-    @property
-    def on_connection_queued_start(
-        self,
-    ) -> "_TracingSignal[_T, TraceConnectionQueuedStartParams]":
-        return self._on_connection_queued_start
 
-    @property
-    def on_connection_queued_end(
-        self,
-    ) -> "_TracingSignal[_T, TraceConnectionQueuedEndParams]":
-        return self._on_connection_queued_end
 
-    @property
-    def on_connection_create_start(
-        self,
-    ) -> "_TracingSignal[_T, TraceConnectionCreateStartParams]":
-        return self._on_connection_create_start
 
-    @property
-    def on_connection_create_end(
-        self,
-    ) -> "_TracingSignal[_T, TraceConnectionCreateEndParams]":
-        return self._on_connection_create_end
 
-    @property
-    def on_connection_reuseconn(
-        self,
-    ) -> "_TracingSignal[_T, TraceConnectionReuseconnParams]":
-        return self._on_connection_reuseconn
 
-    @property
-    def on_dns_resolvehost_start(
-        self,
-    ) -> "_TracingSignal[_T, TraceDnsResolveHostStartParams]":
-        return self._on_dns_resolvehost_start
 
-    @property
-    def on_dns_resolvehost_end(
-        self,
-    ) -> "_TracingSignal[_T, TraceDnsResolveHostEndParams]":
-        return self._on_dns_resolvehost_end
 
-    @property
-    def on_dns_cache_hit(self) -> "_TracingSignal[_T, TraceDnsCacheHitParams]":
-        return self._on_dns_cache_hit
 
-    @property
-    def on_dns_cache_miss(self) -> "_TracingSignal[_T, TraceDnsCacheMissParams]":
-        return self._on_dns_cache_miss
 
-    @property
-    def on_request_headers_sent(
-        self,
-    ) -> "_TracingSignal[_T, TraceRequestHeadersSentParams]":
-        return self._on_request_headers_sent
 
 
 @frozen_dataclass_decorator
 class TraceRequestStartParams:
-    """Parameters sent by the `on_request_start` signal"""
 
     method: str
     url: URL
@@ -222,7 +148,6 @@ class TraceRequestStartParams:
 
 @frozen_dataclass_decorator
 class TraceRequestChunkSentParams:
-    """Parameters sent by the `on_request_chunk_sent` signal"""
 
     method: str
     url: URL
@@ -231,7 +156,6 @@ class TraceRequestChunkSentParams:
 
 @frozen_dataclass_decorator
 class TraceResponseChunkReceivedParams:
-    """Parameters sent by the `on_response_chunk_received` signal"""
 
     method: str
     url: URL
@@ -240,7 +164,6 @@ class TraceResponseChunkReceivedParams:
 
 @frozen_dataclass_decorator
 class TraceRequestEndParams:
-    """Parameters sent by the `on_request_end` signal"""
 
     method: str
     url: URL
@@ -250,7 +173,6 @@ class TraceRequestEndParams:
 
 @frozen_dataclass_decorator
 class TraceRequestExceptionParams:
-    """Parameters sent by the `on_request_exception` signal"""
 
     method: str
     url: URL
@@ -260,7 +182,6 @@ class TraceRequestExceptionParams:
 
 @frozen_dataclass_decorator
 class TraceRequestRedirectParams:
-    """Parameters sent by the `on_request_redirect` signal"""
 
     method: str
     url: URL
@@ -270,60 +191,55 @@ class TraceRequestRedirectParams:
 
 @frozen_dataclass_decorator
 class TraceConnectionQueuedStartParams:
-    """Parameters sent by the `on_connection_queued_start` signal"""
+    pass
 
 
 @frozen_dataclass_decorator
 class TraceConnectionQueuedEndParams:
-    """Parameters sent by the `on_connection_queued_end` signal"""
+    pass
 
 
 @frozen_dataclass_decorator
 class TraceConnectionCreateStartParams:
-    """Parameters sent by the `on_connection_create_start` signal"""
+    pass
 
 
 @frozen_dataclass_decorator
 class TraceConnectionCreateEndParams:
-    """Parameters sent by the `on_connection_create_end` signal"""
+    pass
 
 
 @frozen_dataclass_decorator
 class TraceConnectionReuseconnParams:
-    """Parameters sent by the `on_connection_reuseconn` signal"""
+    pass
 
 
 @frozen_dataclass_decorator
 class TraceDnsResolveHostStartParams:
-    """Parameters sent by the `on_dns_resolvehost_start` signal"""
 
     host: str
 
 
 @frozen_dataclass_decorator
 class TraceDnsResolveHostEndParams:
-    """Parameters sent by the `on_dns_resolvehost_end` signal"""
 
     host: str
 
 
 @frozen_dataclass_decorator
 class TraceDnsCacheHitParams:
-    """Parameters sent by the `on_dns_cache_hit` signal"""
 
     host: str
 
 
 @frozen_dataclass_decorator
 class TraceDnsCacheMissParams:
-    """Parameters sent by the `on_dns_cache_miss` signal"""
 
     host: str
 
 
 @frozen_dataclass_decorator
 class TraceRequestHeadersSentParams:
-    """Parameters sent by the `on_request_headers_sent` signal"""
 
     method: str
     url: URL
@@ -331,11 +247,6 @@ class TraceRequestHeadersSentParams:
 
 
 class Trace:
-    """Internal dependency holder class.
-
-    Used to keep together the main dependencies used
-    at the moment of send a signal.
-    """
 
     def __init__(
         self,
@@ -356,23 +267,7 @@ class Trace:
             TraceRequestStartParams(method, url, headers),
         )
 
-    async def send_request_chunk_sent(
-        self, method: str, url: URL, chunk: bytes
-    ) -> None:
-        return await self._trace_config.on_request_chunk_sent.send(
-            self._session,
-            self._trace_config_ctx,
-            TraceRequestChunkSentParams(method, url, chunk),
-        )
 
-    async def send_response_chunk_received(
-        self, method: str, url: URL, chunk: bytes
-    ) -> None:
-        return await self._trace_config.on_response_chunk_received.send(
-            self._session,
-            self._trace_config_ctx,
-            TraceResponseChunkReceivedParams(method, url, chunk),
-        )
 
     async def send_request_end(
         self,
@@ -413,56 +308,12 @@ class Trace:
             TraceRequestRedirectParams(method, url, headers, response),
         )
 
-    async def send_connection_queued_start(self) -> None:
-        return await self._trace_config.on_connection_queued_start.send(
-            self._session, self._trace_config_ctx, TraceConnectionQueuedStartParams()
-        )
 
-    async def send_connection_queued_end(self) -> None:
-        return await self._trace_config.on_connection_queued_end.send(
-            self._session, self._trace_config_ctx, TraceConnectionQueuedEndParams()
-        )
 
-    async def send_connection_create_start(self) -> None:
-        return await self._trace_config.on_connection_create_start.send(
-            self._session, self._trace_config_ctx, TraceConnectionCreateStartParams()
-        )
 
-    async def send_connection_create_end(self) -> None:
-        return await self._trace_config.on_connection_create_end.send(
-            self._session, self._trace_config_ctx, TraceConnectionCreateEndParams()
-        )
 
-    async def send_connection_reuseconn(self) -> None:
-        return await self._trace_config.on_connection_reuseconn.send(
-            self._session, self._trace_config_ctx, TraceConnectionReuseconnParams()
-        )
 
-    async def send_dns_resolvehost_start(self, host: str) -> None:
-        return await self._trace_config.on_dns_resolvehost_start.send(
-            self._session, self._trace_config_ctx, TraceDnsResolveHostStartParams(host)
-        )
 
-    async def send_dns_resolvehost_end(self, host: str) -> None:
-        return await self._trace_config.on_dns_resolvehost_end.send(
-            self._session, self._trace_config_ctx, TraceDnsResolveHostEndParams(host)
-        )
 
-    async def send_dns_cache_hit(self, host: str) -> None:
-        return await self._trace_config.on_dns_cache_hit.send(
-            self._session, self._trace_config_ctx, TraceDnsCacheHitParams(host)
-        )
 
-    async def send_dns_cache_miss(self, host: str) -> None:
-        return await self._trace_config.on_dns_cache_miss.send(
-            self._session, self._trace_config_ctx, TraceDnsCacheMissParams(host)
-        )
 
-    async def send_request_headers(
-        self, method: str, url: URL, headers: "CIMultiDict[str]"
-    ) -> None:
-        return await self._trace_config._on_request_headers_sent.send(
-            self._session,
-            self._trace_config_ctx,
-            TraceRequestHeadersSentParams(method, url, headers),
-        )

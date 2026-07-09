@@ -95,25 +95,18 @@ class FileField:
 
 
 _TCHAR: Final[str] = string.digits + string.ascii_letters + r"!#$%&'*+.^_`|~-"
-# '-' at the end to prevent interpretation as range in a char class
 
 _TOKEN: Final[str] = rf"[{_TCHAR}]+"
 
 _QDTEXT: Final[str] = r"[{}]".format(
     r"".join(chr(c) for c in (0x09, 0x20, 0x21) + tuple(range(0x23, 0x7F)))
 )
-# qdtext includes 0x5C to escape 0x5D ('\]')
-# qdtext excludes obs-text (because obsoleted, and encoding not specified)
 
-# This does not have a ReDOS/performance concern as long as it used with re.match().
 _FORWARDED_PAIR: Final[str] = (
     rf'[ \t]*({_TOKEN})=({_TOKEN}|".*")(:\d{{1,4}})?[ \t]*(?:\Z|;)'
 )
 _FORWARDED_PAIR_RE: Final[Pattern[str]] = re.compile(_FORWARDED_PAIR)
 
-############################################################
-# HTTP Request
-############################################################
 
 
 class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
@@ -162,9 +155,6 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
                 url = url.with_scheme(scheme)
             if host is not None:
                 url = url.with_host(host)
-            # absolute URL is given,
-            # override auto-calculating url, host, and scheme
-            # all other properties should be good
             self._cache["url"] = url
             self._cache["host"] = url.host
             self._cache["scheme"] = url.scheme
@@ -216,7 +206,6 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
             dct["url"] = new_url
             dct["path"] = str(new_url)
         if headers is not sentinel:
-            # a copy semantic
             new_headers = HeadersDictProxy(CIMultiDict(headers))
             dct["headers"] = new_headers
             dct["raw_headers"] = tuple(
@@ -253,31 +242,12 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
     def task(self) -> "asyncio.Task[None]":
         return self._task
 
-    @property
-    def protocol(self) -> "RequestHandler[Self]":
-        return self._protocol
 
-    @property
-    def transport(self) -> asyncio.Transport | None:
-        return self._protocol.transport
 
-    @property
-    def writer(self) -> AbstractStreamWriter:
-        return self._payload_writer
 
-    @property
-    def client_max_size(self) -> int:
-        return self._client_max_size
 
-    @property
-    def pre_handler_error(self) -> HTTPBadRequest | None:
-        return self._pre_handler_error
 
-    @reify
-    def rel_url(self) -> URL:
-        return self._rel_url
 
-    # MutableMapping API
 
     @overload  # type: ignore[override]
     def __getitem__(self, key: RequestKey[_T]) -> _T: ...
@@ -306,71 +276,18 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
     def __iter__(self) -> Iterator[str | RequestKey[Any]]:
         return iter(self._state)
 
-    ########
 
     @reify
     def secure(self) -> bool:
-        """A bool indicating if the request is handled with SSL."""
-        return self.scheme == "https"
+        pass
 
     @reify
     def forwarded(self) -> tuple[Mapping[str, str], ...]:
-        """A tuple containing all parsed Forwarded header(s).
-
-        Makes an effort to parse Forwarded headers as specified by RFC 7239:
-
-        - It adds one (immutable) dictionary per Forwarded 'field-value', ie
-          per proxy. The element corresponds to the data in the Forwarded
-          field-value added by the first proxy encountered by the client. Each
-          subsequent item corresponds to those added by later proxies.
-        - It checks that every value has valid syntax in general as specified
-          in section 4: either a 'token' or a 'quoted-string'.
-        - It un-escapes found escape sequences.
-        - It does NOT validate 'by' and 'for' contents as specified in section
-          6.
-        - It does NOT validate 'host' contents (Host ABNF).
-        - It does NOT validate 'proto' contents for valid URI scheme names.
-
-        Returns a tuple containing one or more immutable dicts
-        """
-        elems = []
-        for field_value in self._message.headers.getall(hdrs.FORWARDED):
-            pos = 0
-            elem: dict[str, str] = {}
-            elems.append(types.MappingProxyType(elem))
-            while 0 <= pos < len(field_value):
-                match = _FORWARDED_PAIR_RE.match(field_value, pos)
-                if match is not None:  # got a valid forwarded-pair
-                    name, value, port = match.groups()
-                    if value[0] == value[-1] == '"':
-                        value = value[1:-1]
-                    if port:
-                        value += port
-                    elem[name.lower()] = value
-                    pos += len(match.group(0))
-                elif not field_value[pos : field_value.find(";", pos)].strip(" \t"):
-                    # Empty value
-                    pos = field_value.find(";", pos) + 1
-                else:
-                    # bad syntax here, skip to next field value
-                    break
-        return tuple(elems)
+        pass
 
     @reify
     def scheme(self) -> str:
-        """A string representing the scheme of the request.
-
-        Hostname is resolved in this order:
-
-        - overridden value by .clone(scheme=new_scheme) call.
-        - type of connection to peer: HTTPS if socket is SSL, HTTP otherwise.
-
-        'http' or 'https'.
-        """
-        if self._transport_sslcontext:
-            return "https"
-        else:
-            return "http"
+        pass
 
     @reify
     def method(self) -> str:
@@ -382,183 +299,72 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
 
     @reify
     def version(self) -> HttpVersion:
-        """Read only property for getting HTTP version of request.
-
-        Returns aiohttp.protocol.HttpVersion instance.
-        """
-        return self._version
+        pass
 
     @reify
     def host(self) -> str:
-        """Hostname of the request.
-
-        Hostname is resolved in this order:
-
-        - overridden value by .clone(host=new_host) call.
-        - HOST HTTP header
-        - local socket address the request arrived on
-          (transport ``sockname``)
-        - empty string if no transport information is available
-
-        For example, 'example.com' or 'localhost:8080'.
-
-        For historical reasons, the port number may be included.
-        """
-        host = self._message.headers.get(hdrs.HOST)
-        if host is not None:
-            return host
-        sockname = self._transport_sockname
-        if sockname is None:
-            return ""
-        if isinstance(sockname, tuple):
-            # AF_INET6 returns a 4-tuple (host, port, flowinfo, scopeid);
-            # bracket the bare address so it matches the Host-header shape
-            # and is a valid URL authority component.
-            if len(sockname) == 4:
-                return f"[{sockname[0]}]"
-            return str(sockname[0])
-        return str(sockname)
+        pass
 
     @reify
     def remote(self) -> str | None:
-        """Remote IP of client initiated HTTP request.
-
-        The IP is resolved in this order:
-
-        - overridden value by .clone(remote=new_remote) call.
-        - peername of opened socket
-        """
-        if self._transport_peername is None:
-            return None
-        if isinstance(self._transport_peername, (list, tuple)):
-            return str(self._transport_peername[0])
-        return str(self._transport_peername)
+        pass
 
     @reify
     def url(self) -> URL:
-        """The full URL of the request."""
-        # authority is used here because it may include the port number
-        # and we want yarl to parse it correctly
-        return URL.build(scheme=self.scheme, authority=self.host).join(self._rel_url)
+        pass
 
     @reify
     def path(self) -> str:
-        """The URL including *PATH INFO* without the host or scheme.
-
-        E.g., ``/app/blog``
-        """
-        return self._rel_url.path
+        pass
 
     @reify
     def path_qs(self) -> str:
-        """The URL including PATH_INFO and the query string.
-
-        E.g, /app/blog?id=10
-        """
-        return str(self._rel_url)
+        pass
 
     @reify
     def raw_path(self) -> str:
-        """The URL including raw *PATH INFO* without the host or scheme.
-
-        Warning, the path is unquoted and may contains non valid URL characters
-
-        E.g., ``/my%2Fpath%7Cwith%21some%25strange%24characters``
-        """
-        return self._message.path
+        pass
 
     @reify
     def query(self) -> MultiDictProxy[str]:
-        """A multidict with all the variables in the query string."""
-        return self._rel_url.query
+        pass
 
     @reify
     def query_string(self) -> str:
-        """The query string in the URL.
-
-        E.g., id=10
-        """
-        return self._rel_url.query_string
+        pass
 
     @reify
     def headers(self) -> HeadersDictProxy:
-        """A case-insensitive multidict proxy with all headers."""
-        return self._headers
+        pass
 
     @reify
     def raw_headers(self) -> RawHeaders:
-        """A sequence of pairs for all headers."""
-        return self._message.raw_headers
+        pass
 
     @reify
     def if_modified_since(self) -> datetime.datetime | None:
-        """The value of If-Modified-Since HTTP header, or None.
-
-        This header is represented as a `datetime` object.
-        """
-        return parse_http_date(self.headers.get(hdrs.IF_MODIFIED_SINCE))
+        pass
 
     @reify
     def if_unmodified_since(self) -> datetime.datetime | None:
-        """The value of If-Unmodified-Since HTTP header, or None.
-
-        This header is represented as a `datetime` object.
-        """
-        return parse_http_date(self.headers.get(hdrs.IF_UNMODIFIED_SINCE))
+        pass
 
     @staticmethod
     def _etag_values(etag_header: str) -> Iterator[ETag]:
-        """Extract `ETag` objects from raw header."""
-        if etag_header == ETAG_ANY:
-            yield ETag(
-                is_weak=False,
-                value=ETAG_ANY,
-            )
-        else:
-            for match in LIST_QUOTED_ETAG_RE.finditer(etag_header):
-                is_weak, value, garbage = match.group(2, 3, 4)
-                # Any symbol captured by 4th group means
-                # that the following sequence is invalid.
-                if garbage:
-                    break
+        pass
 
-                yield ETag(
-                    is_weak=bool(is_weak),
-                    value=value,
-                )
-
-    @classmethod
-    def _if_match_or_none_impl(
-        cls, header_value: str | None
-    ) -> tuple[ETag, ...] | None:
-        if not header_value:
-            return None
-
-        return tuple(cls._etag_values(header_value))
 
     @reify
     def if_match(self) -> tuple[ETag, ...] | None:
-        """The value of If-Match HTTP header, or None.
-
-        This header is represented as a `tuple` of `ETag` objects.
-        """
-        return self._if_match_or_none_impl(self.headers.get(hdrs.IF_MATCH))
+        pass
 
     @reify
     def if_none_match(self) -> tuple[ETag, ...] | None:
-        """The value of If-None-Match HTTP header, or None.
-
-        This header is represented as a `tuple` of `ETag` objects.
-        """
-        return self._if_match_or_none_impl(self.headers.get(hdrs.IF_NONE_MATCH))
+        pass
 
     @reify
     def if_range(self) -> datetime.datetime | None:
-        """The value of If-Range HTTP header, or None.
-
-        This header is represented as a `datetime` object.
-        """
-        return parse_http_date(self.headers.get(hdrs.IF_RANGE))
+        pass
 
     @reify
     def keep_alive(self) -> bool:
@@ -567,66 +373,23 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
 
     @reify
     def cookies(self) -> Mapping[str, str]:
-        """Return request cookies.
-
-        A read-only dictionary-like object.
-        """
-        # Use parse_cookie_header for RFC 6265 compliant Cookie header parsing
-        # that accepts special characters in cookie names (fixes #2683)
-        parsed = parse_cookie_header(self.headers.get(hdrs.COOKIE, ""))
-        # Extract values from Morsel objects
-        return MappingProxyType({name: morsel.value for name, morsel in parsed})
+        pass
 
     @reify
     def http_range(self) -> "slice[int, int, int]":
-        """The content of Range HTTP header.
-
-        Return a slice instance.
-
-        """
-        rng = self._headers.get(hdrs.RANGE)
-        start, end = None, None
-        if rng is not None:
-            try:
-                pattern = r"^bytes=(\d*)-(\d*)$"
-                start, end = re.findall(pattern, rng, re.ASCII)[0]
-            except IndexError:  # pattern was not found in header
-                raise ValueError("range not in acceptable format")
-
-            end = int(end) if end else None
-            start = int(start) if start else None
-
-            if start is None and end is not None:
-                # end with no start is to return tail of content
-                start = -end
-                end = None
-
-            if start is not None and end is not None:
-                # end is inclusive in range header, exclusive for slice
-                end += 1
-
-                if start >= end:
-                    raise ValueError("start cannot be after end")
-
-            if start is end is None:  # No valid range supplied
-                raise ValueError("No start or end of range specified")
-
-        return slice(start, end, 1)
+        pass
 
     @reify
     def content(self) -> StreamReader:
-        """Return raw payload stream."""
-        return self._payload
+        pass
 
     @property
     def can_read_body(self) -> bool:
-        """Return True if request's HTTP BODY can be read, False otherwise."""
-        return not self._payload.at_eof()
+        pass
 
     @reify
     def body_exists(self) -> bool:
-        """Return True if request has HTTP BODY, False otherwise."""
-        return type(self._payload) is not EmptyStreamReader
+        pass
 
     async def release(self) -> None:
         """Release request.
@@ -642,8 +405,6 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
         Returns bytes object with full request content.
         """
         if self._read_bytes is None:
-            # Raise the buffer limits so compressed payloads decompress in
-            # larger chunks instead of many small pause/resume cycles.
             if self._client_max_size:
                 self._payload.set_read_chunk_size(self._client_max_size)
             body = bytearray()
@@ -729,12 +490,7 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
                     if field.name is None:
                         raise ValueError("Multipart field missing name.")
 
-                    # Note that according to RFC 7578, the Content-Type header
-                    # is optional, even for files, so we can't assume it's
-                    # present.
-                    # https://tools.ietf.org/html/rfc7578#section-4.4
                     if field.filename:
-                        # store file in temp file
                         tmp = await self._loop.run_in_executor(
                             None, tempfile.TemporaryFile
                         )
@@ -761,7 +517,6 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
                         )
                         out.add(field.name, ff)
                     else:
-                        # deal with ordinary data
                         raw_data = bytearray()
                         while chunk := await field.read_chunk():
                             size += len(chunk)
@@ -770,7 +525,6 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
                             raw_data.extend(chunk)
 
                         value = bytearray()
-                        # form-data doesn't support compression, so don't need to check size again.
                         async for d in field.decode_iter(raw_data):  # type: ignore[arg-type]
                             value.extend(d)
 
@@ -829,10 +583,6 @@ class BaseRequest(MutableMapping[str | RequestKey[Any], Any], HeadersMixin):
         if self._post is None or self.content_type != "multipart/form-data":
             return
 
-        # NOTE: Release file descriptors for the
-        # NOTE: `tempfile.Temporaryfile`-created `_io.BufferedRandom`
-        # NOTE: instances of files sent within multipart request body
-        # NOTE: via HTTP POST request.
         for file_name, file_field_object in self._post.items():
             if isinstance(file_field_object, FileField):
                 file_field_object.file.close()
@@ -868,27 +618,12 @@ class Request(BaseRequest):
 
     @reify
     def match_info(self) -> "UrlMappingMatchInfo":
-        """Result of route resolving."""
-        match_info = self._match_info
-        assert match_info is not None
-        return match_info
+        pass
 
     @property
     def app(self) -> "Application":
-        """Application instance."""
-        match_info = self._match_info
-        assert match_info is not None
-        return match_info.current_app
+        pass
 
-    @property
-    def config_dict(self) -> ChainMapProxy:
-        match_info = self._match_info
-        assert match_info is not None
-        lst = match_info.apps
-        app = self.app
-        idx = lst.index(app)
-        sublist = list(reversed(lst[: idx + 1]))
-        return ChainMapProxy(sublist)
 
     async def _prepare_hook(self, response: StreamResponse) -> None:
         match_info = self._match_info

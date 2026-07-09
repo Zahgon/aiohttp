@@ -15,10 +15,6 @@ __all__ = ("FormData",)
 
 
 class FormData:
-    """Helper class for form body generation.
-
-    Supports multipart/form-data and application/x-www-form-urlencoded.
-    """
 
     def __init__(
         self,
@@ -42,9 +38,6 @@ class FormData:
             fields = (fields,)
         self.add_fields(*fields)
 
-    @property
-    def is_multipart(self) -> bool:
-        return self._is_multipart
 
     def add_field(
         self,
@@ -104,60 +97,9 @@ class FormData:
                     f"more complex parameters, got {rec!r}"
                 )
 
-    def _gen_form_urlencoded(self) -> payload.BytesPayload:
-        # form data (x-www-form-urlencoded)
-        data = []
-        for type_options, _, value in self._fields:
-            if not isinstance(value, str):
-                raise TypeError(f"expected str, got {value!r}")
-            data.append((type_options["name"], value))
-
-        charset = self._charset if self._charset is not None else "utf-8"
-
-        if charset == "utf-8":
-            content_type = "application/x-www-form-urlencoded"
-        else:
-            content_type = "application/x-www-form-urlencoded; charset=%s" % charset
-
-        return payload.BytesPayload(
-            urlencode(data, doseq=True, encoding=charset).encode(),
-            content_type=content_type,
-        )
 
     def _gen_form_data(self) -> multipart.MultipartWriter:
-        """Encode a list of fields using the multipart/form-data MIME format"""
-        for dispparams, headers, value in self._fields:
-            try:
-                if hdrs.CONTENT_TYPE in headers:
-                    part = payload.get_payload(
-                        value,
-                        content_type=headers[hdrs.CONTENT_TYPE],
-                        headers=headers,
-                        encoding=self._charset,
-                    )
-                else:
-                    part = payload.get_payload(
-                        value, headers=headers, encoding=self._charset
-                    )
-            except Exception as exc:
-                raise TypeError(
-                    "Can not serialize value type: %r\n "
-                    "headers: %r\n value: %r" % (type(value), headers, value)
-                ) from exc
-
-            if dispparams:
-                part.set_content_disposition(
-                    "form-data", quote_fields=self._quote_fields, **dispparams
-                )
-                # FIXME cgi.FieldStorage doesn't likes body parts with
-                # Content-Length which were sent via chunked transfer encoding
-                assert part.headers is not None
-                part.headers.popall(hdrs.CONTENT_LENGTH, None)
-
-            self._writer.append_payload(part)
-
-        self._fields.clear()
-        return self._writer
+        pass
 
     def __call__(self) -> Payload:
         if self._is_multipart:

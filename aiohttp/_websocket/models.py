@@ -1,4 +1,3 @@
-"""Models for WebSocket protocol versions 13 and 8."""
 
 import json
 from collections.abc import Callable
@@ -25,7 +24,6 @@ class WSCloseCode(IntEnum):
 
 
 class WSMsgType(IntEnum):
-    # websocket spec types
     CONTINUATION = 0x0
     TEXT = 0x1
     BINARY = 0x2
@@ -33,7 +31,6 @@ class WSMsgType(IntEnum):
     PONG = 0xA
     CLOSE = 0x8
 
-    # aiohttp specific types
     CLOSING = 0x100
     CLOSED = 0x101
     ERROR = 0x102
@@ -60,7 +57,6 @@ class WSMessageText(NamedTuple):
 
 
 class WSMessageTextBytes(NamedTuple):
-    """WebSocket TEXT message with raw bytes (no UTF-8 decoding)."""
 
     data: bytes
     size: int
@@ -127,7 +123,6 @@ class WSMessageError(NamedTuple):
     type: Literal[WSMsgType.ERROR] = WSMsgType.ERROR
 
 
-# Base message types (excluding TEXT variants)
 _WSMessageBase = (
     WSMessageContinuation
     | WSMessageBinary
@@ -139,13 +134,10 @@ _WSMessageBase = (
     | WSMessageError
 )
 
-# All message types
 WSMessage = _WSMessageBase | WSMessageText | WSMessageTextBytes
 
-# Message type when decode_text=True (default) - TEXT messages have str data
 WSMessageDecodeText = _WSMessageBase | WSMessageText
 
-# Message type when decode_text=False - TEXT messages have bytes data
 WSMessageNoDecodeText = _WSMessageBase | WSMessageTextBytes
 
 WS_CLOSED_MESSAGE = WSMessageClosed()
@@ -153,7 +145,6 @@ WS_CLOSING_MESSAGE = WSMessageClosing()
 
 
 class WebSocketError(Exception):
-    """WebSocket protocol parser error."""
 
     def __init__(self, code: int, message: str) -> None:
         self.code = code
@@ -164,4 +155,4 @@ class WebSocketError(Exception):
 
 
 class WSHandshakeError(Exception):
-    """WebSocket protocol handshake error."""
+    pass

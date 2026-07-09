@@ -1,4 +1,3 @@
-"""Async gunicorn worker for aiohttp.web"""
 
 import asyncio
 import inspect
@@ -41,20 +40,9 @@ class GunicornWebWorker(base.Worker):  # type: ignore[misc,no-any-unimported]
         self.exit_code = 0
         self._notify_waiter: asyncio.Future[bool] | None = None
 
-    def init_process(self) -> None:
-        # create new event_loop after fork
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-
-        super().init_process()
+    pass
 
     def run(self) -> None:
-        # base.Worker.init_process() sets self.booted = True before
-        # invoking run(), but for the aiohttp worker the real boot work
-        # (factory call, runner setup, binding sockets) happens here.
-        # Reset until _run() reaches the serve loop so that the arbiter
-        # can tell a startup failure from a normal worker exit and
-        # halt instead of endlessly respawning workers.
         self.booted = False
 
         self._task = self.loop.create_task(self._run())
@@ -112,13 +100,8 @@ class GunicornWebWorker(base.Worker):  # type: ignore[misc,no-any-unimported]
             )
             await site.start()
 
-        # Sockets are bound; tell the arbiter the worker is ready to
-        # accept requests. Any failure before this point propagates out
-        # of run() with self.booted=False so the arbiter exits with
-        # WORKER_BOOT_ERROR instead of treating this as a clean exit.
         self.booted = True
 
-        # If our parent changed then we shut down.
         pid = os.getpid()
         try:
             while self.alive:  # type: ignore[has-type]
@@ -160,58 +143,11 @@ class GunicornWebWorker(base.Worker):  # type: ignore[misc,no-any-unimported]
         if waiter is self._notify_waiter:
             self._notify_waiter = None
 
-    def init_signals(self) -> None:
-        # Set up signals through the event loop API.
+    pass
 
-        self.loop.add_signal_handler(
-            signal.SIGQUIT, self.handle_quit, signal.SIGQUIT, None
-        )
+    pass
 
-        self.loop.add_signal_handler(
-            signal.SIGTERM, self.handle_exit, signal.SIGTERM, None
-        )
-
-        self.loop.add_signal_handler(
-            signal.SIGINT, self.handle_quit, signal.SIGINT, None
-        )
-
-        self.loop.add_signal_handler(
-            signal.SIGWINCH, self.handle_winch, signal.SIGWINCH, None
-        )
-
-        self.loop.add_signal_handler(
-            signal.SIGUSR1, self.handle_usr1, signal.SIGUSR1, None
-        )
-
-        self.loop.add_signal_handler(
-            signal.SIGABRT, self.handle_abort, signal.SIGABRT, None
-        )
-
-        # Don't let SIGTERM and SIGUSR1 disturb active requests
-        # by interrupting system calls
-        signal.siginterrupt(signal.SIGTERM, False)
-        signal.siginterrupt(signal.SIGUSR1, False)
-
-        # Reset SIGCHLD to default so Gunicorn doesn't swallow subprocess
-        # return codes. Without this, workers inherit the master arbiter's
-        # SIGCHLD handler, causing spurious "Worker exited" errors when
-        # application code spawns subprocesses.
-        signal.signal(signal.SIGCHLD, signal.SIG_DFL)
-
-    def handle_quit(self, sig: int, frame: FrameType | None) -> None:
-        self.alive = False
-
-        # worker_int callback
-        self.cfg.worker_int(self)
-
-        # wakeup closing process
-        self._notify_waiter_done()
-
-    def handle_abort(self, sig: int, frame: FrameType | None) -> None:
-        self.alive = False
-        self.exit_code = 1
-        self.cfg.worker_abort(self)
-        sys.exit(1)
+    pass
 
     @staticmethod
     def _create_ssl_context(cfg: Any) -> "SSLContext":
@@ -247,9 +183,4 @@ class GunicornWebWorker(base.Worker):  # type: ignore[misc,no-any-unimported]
 
 
 class GunicornUVLoopWebWorker(GunicornWebWorker):
-    def init_process(self) -> None:
-        import uvloop
-
-        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-
-        super().init_process()
+    pass

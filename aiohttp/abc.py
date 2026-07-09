@@ -34,9 +34,6 @@ class AbstractRouter(ABC):
         it can override this.
         """
 
-    @property
-    def frozen(self) -> bool:
-        return self._frozen
 
     def freeze(self) -> None:
         """Freeze router."""
@@ -97,7 +94,6 @@ class AbstractMatchInfo(ABC):
 
 
 class AbstractView(ABC):
-    """Abstract class based view."""
 
     def __init__(self, request: Request) -> None:
         self._request = request
@@ -113,18 +109,6 @@ class AbstractView(ABC):
 
 
 class ResolveResult(TypedDict):
-    """Resolve result.
-
-    This is the result returned from an AbstractResolver's
-    resolve method.
-
-    :param hostname: The hostname that was provided.
-    :param host: The IP address that was resolved.
-    :param port: The port that was resolved.
-    :param family: The address family that was resolved.
-    :param proto: The protocol that was resolved.
-    :param flags: The flags that were resolved.
-    """
 
     hostname: str
     host: str
@@ -135,7 +119,6 @@ class ResolveResult(TypedDict):
 
 
 class AbstractResolver(ABC):
-    """Abstract DNS resolver."""
 
     @abstractmethod
     async def resolve(
@@ -152,7 +135,6 @@ ClearCookiePredicate = Callable[[Morsel[str]], bool]
 
 
 class AbstractCookieJar(Sized, Iterable[Morsel[str]]):
-    """Abstract Cookie Jar."""
 
     @property
     @abstractmethod
@@ -199,7 +181,6 @@ class AbstractCookieJar(Sized, Iterable[Morsel[str]]):
 
 
 class AbstractStreamWriter(ABC):
-    """Abstract stream writer."""
 
     buffer_size: int = 0
     output_size: int = 0
@@ -242,7 +223,6 @@ class AbstractStreamWriter(ABC):
 
 
 class AbstractAccessLogger(ABC):
-    """Abstract writer to access log."""
 
     __slots__ = ("logger", "log_format")
 
@@ -256,12 +236,10 @@ class AbstractAccessLogger(ABC):
 
     @property
     def enabled(self) -> bool:
-        """Check if logger is enabled."""
-        return True
+        pass
 
 
 class AbstractAsyncAccessLogger(ABC):
-    """Abstract asynchronous writer to access log."""
 
     __slots__ = ()
 
@@ -273,5 +251,4 @@ class AbstractAsyncAccessLogger(ABC):
 
     @property
     def enabled(self) -> bool:
-        """Check if logger is enabled."""
-        return True
+        pass

@@ -62,7 +62,6 @@ __all__ = (
 
 THRESHOLD_CONNLOST_ACCESS: Final[int] = 5
 
-# TypeVar for whether text messages are decoded to str (True) or kept as bytes (False)
 _DecodeText = TypeVar("_DecodeText", bound=bool, covariant=True, default=Literal[True])
 
 
@@ -144,22 +143,7 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
             self._pong_response_cb.cancel()
             self._pong_response_cb = None
 
-    def _on_data_received(self) -> None:
-        if self._heartbeat is None or self._need_heartbeat_reset:
-            return
-        loop = self._loop
-        assert loop is not None
-        # Coalesce multiple chunks received in the same loop tick into a single
-        # heartbeat reset. Resetting immediately per chunk increases timer churn.
-        self._need_heartbeat_reset = True
-        self._heartbeat_reset_handle = loop.call_soon(self._flush_heartbeat_reset)
 
-    def _flush_heartbeat_reset(self) -> None:
-        self._heartbeat_reset_handle = None
-        if not self._need_heartbeat_reset:
-            return
-        self._reset_heartbeat()
-        self._need_heartbeat_reset = False
 
     def _reset_heartbeat(self) -> None:
         if self._heartbeat is None:
@@ -175,77 +159,15 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
         when = calculate_timeout_when(now, self._heartbeat, timeout_ceil_threshold)
         self._heartbeat_when = when
         if self._heartbeat_cb is None:
-            # We do not cancel the previous heartbeat_cb here because
-            # it generates a significant amount of TimerHandle churn
-            # which causes asyncio to rebuild the heap frequently.
-            # Instead _send_heartbeat() will reschedule the next
-            # heartbeat if it fires too early.
             self._heartbeat_cb = loop.call_at(when, self._send_heartbeat)
 
-    def _send_heartbeat(self) -> None:
-        self._heartbeat_cb = None
-
-        # If heartbeat reset is pending (data is being received), skip sending
-        # the ping and let the reset callback handle rescheduling the heartbeat.
-        if self._need_heartbeat_reset:
-            return
-
-        loop = self._loop
-        assert loop is not None and self._writer is not None
-        now = loop.time()
-        if now < self._heartbeat_when:
-            # Heartbeat fired too early, reschedule
-            self._heartbeat_cb = loop.call_at(
-                self._heartbeat_when, self._send_heartbeat
-            )
-            return
-
-        req = self._req
-        timeout_ceil_threshold = (
-            req._protocol._timeout_ceil_threshold if req is not None else 5
-        )
-        when = calculate_timeout_when(now, self._pong_heartbeat, timeout_ceil_threshold)
-        self._cancel_pong_response_cb()
-        self._pong_response_cb = loop.call_at(when, self._pong_not_received)
-
-        coro = self._writer.send_frame(b"", WSMsgType.PING)
-        if sys.version_info >= (3, 12):
-            # Optimization for Python 3.12, try to send the ping
-            # immediately to avoid having to schedule
-            # the task on the event loop.
-            ping_task = asyncio.Task(coro, loop=loop, eager_start=True)
-        else:
-            ping_task = loop.create_task(coro)
-
-        if not ping_task.done():
-            self._ping_task = ping_task
-            ping_task.add_done_callback(self._ping_task_done)
-        else:
-            self._ping_task_done(ping_task)
 
     def _ping_task_done(self, task: "asyncio.Task[None]") -> None:
-        """Callback for when the ping task completes."""
-        if not task.cancelled() and (exc := task.exception()):
-            self._handle_ping_pong_exception(exc)
-        self._ping_task = None
+        pass
 
-    def _pong_not_received(self) -> None:
-        if self._req is not None and self._req.transport is not None:
-            self._handle_ping_pong_exception(
-                asyncio.TimeoutError(
-                    f"No PONG received after {self._pong_heartbeat} seconds"
-                )
-            )
 
     def _handle_ping_pong_exception(self, exc: BaseException) -> None:
-        """Handle exceptions raised during ping/pong processing."""
-        if self._closed:
-            return
-        self._set_closed()
-        self._set_code_close_transport(WSCloseCode.ABNORMAL_CLOSURE)
-        self._exception = exc
-        if self._waiting and not self._closing and self._reader is not None:
-            self._reader.feed_data(WSMessageError(data=exc, extra=None))
+        pass
 
     def _set_closed(self) -> None:
         """Set the connection to closed.
@@ -256,7 +178,6 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
         self._cancel_heartbeat()
 
     async def prepare(self, request: BaseRequest) -> AbstractStreamWriter:
-        # make pre-check to don't hide it by do_handshake() exceptions
         if self._payload_writer is not None:
             return self._payload_writer
 
@@ -284,7 +205,6 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
                 text=f"No CONNECTION upgrade hdr: {headers.get(hdrs.CONNECTION)}"
             )
 
-        # find common sub-protocol between client and server
         protocol: str | None = None
         if hdrs.SEC_WEBSOCKET_PROTOCOL in headers:
             req_protocols = [
@@ -297,7 +217,6 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
                     protocol = proto
                     break
             else:
-                # No overlap found: Return no protocol as per spec
                 ws_logger.warning(
                     "%s: Client protocols %r don’t overlap server-known ones %r",
                     request.remote,
@@ -305,12 +224,10 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
                     self._protocols,
                 )
 
-        # check supported version
         version = headers.get(hdrs.SEC_WEBSOCKET_VERSION, "")
         if version not in ("13", "8", "7"):
             raise HTTPBadRequest(text=f"Unsupported version: {version}")
 
-        # check client handshake for validity
         key = headers.get(hdrs.SEC_WEBSOCKET_KEY)
         try:
             if not key or len(base64.b64decode(key)) != 16:
@@ -333,8 +250,6 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
         compress = 0
         if self._compress:
             extensions = headers.get(hdrs.SEC_WEBSOCKET_EXTENSIONS)
-            # Server side always get return with no exception.
-            # If something happened, just drop compress extension
             compress, notakeover = ws_ext_parse(extensions, isserver=True)
             if compress:
                 enabledext = ws_ext_gen(
@@ -394,7 +309,6 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
         )
         cb = None if self._heartbeat is None else self._on_data_received
         request.protocol.set_parser(parser, data_received_cb=cb)
-        # disable HTTP keepalive for WebSocket
         request.protocol.keep_alive(False)
 
     def can_prepare(self, request: BaseRequest) -> WebSocketReady:
@@ -407,21 +321,9 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
         else:
             return WebSocketReady(True, protocol)
 
-    @property
-    def prepared(self) -> bool:
-        return self._writer is not None
 
-    @property
-    def closed(self) -> bool:
-        return self._closed
 
-    @property
-    def close_code(self) -> int | None:
-        return self._close_code
 
-    @property
-    def ws_protocol(self) -> str | None:
-        return self._ws_protocol
 
     @property
     def compress(self) -> int | bool:
@@ -446,7 +348,6 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
         await self._writer.send_frame(message, WSMsgType.PING)
 
     async def pong(self, message: bytes = b"") -> None:
-        # unsolicited pong
         if self._writer is None:
             raise RuntimeError("Call .prepare() first")
         await self._writer.send_frame(message, WSMsgType.PONG)
@@ -534,8 +435,6 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
 
         reader = self._reader
         assert reader is not None
-        # we need to break `receive()` cycle before we can call
-        # `reader.read()` as `close()` may be called from different task
         if self._waiting:
             assert self._loop is not None
             assert self._close_wait is None
@@ -616,10 +515,6 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
                 self._waiting = True
                 try:
                     if receive_timeout:
-                        # Entering the context manager and creating
-                        # Timeout() object can take almost 50% of the
-                        # run time in this loop so we avoid it if
-                        # there is no read timeout.
                         async with async_timeout.timeout(receive_timeout):
                             msg = await self._reader.read()
                     else:
@@ -645,18 +540,11 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
                 return WSMessageError(data=exc)
 
             if msg.type not in _INTERNAL_RECEIVE_TYPES:
-                # If its not a close/closing/ping/pong message
-                # we can return it immediately
                 return msg
 
             if msg.type is WSMsgType.CLOSE:
                 self._set_closing(msg.data)
-                # Could be closed while awaiting reader.
                 if not self._closed and self._autoclose:  # type: ignore[redundant-expr]
-                    # The client is likely going to close the
-                    # connection out from under us so we do not
-                    # want to drain any pending writes as it will
-                    # likely result writing to a broken pipe.
                     await self.close(drain=False)
             elif msg.type is WSMsgType.CLOSING:
                 self._set_closing(WSCloseCode.OK)
@@ -766,8 +654,6 @@ class WebSocketResponse(StreamResponse, Generic[_DecodeText]):
         return msg
 
     def _cancel(self, exc: BaseException) -> None:
-        # web_protocol calls this from connection_lost
-        # or when the server is shutting down.
         self._closing = True
         self._cancel_heartbeat()
         if self._reader is not None:

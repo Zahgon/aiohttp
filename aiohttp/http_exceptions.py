@@ -1,4 +1,3 @@
-"""Low-level http related exceptions."""
 
 from textwrap import indent
 
@@ -8,14 +7,6 @@ __all__ = ("HttpProcessingError",)
 
 
 class HttpProcessingError(Exception):
-    """HTTP error.
-
-    Shortcut for raising HTTP errors with custom code, message and headers.
-
-    code: HTTP Error code.
-    message: (optional) Error message.
-    headers: (optional) Headers to be sent in response, a list of pairs
-    """
 
     code = 0
     message = ""
@@ -58,19 +49,19 @@ class HttpBadRequest(BadHttpMessage):
 
 
 class PayloadEncodingError(BadHttpMessage):
-    """Base class for payload errors"""
+    pass
 
 
 class ContentEncodingError(PayloadEncodingError):
-    """Content encoding error."""
+    pass
 
 
 class TransferEncodingError(PayloadEncodingError):
-    """transfer encoding error."""
+    pass
 
 
 class ContentLengthError(PayloadEncodingError):
-    """Not enough data to satisfy content length header."""
+    pass
 
 
 class LineTooLong(BadHttpMessage):
@@ -101,7 +92,6 @@ class BadStatusLine(BadHttpMessage):
 
 
 class BadHttpMethod(BadStatusLine):
-    """Invalid HTTP method in status line."""
 
     def __init__(self, line: str = "", error: str | None = None) -> None:
         if error is None and line.startswith("\x16\x03"):

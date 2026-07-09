@@ -18,31 +18,6 @@ class KeyMethod(NamedTuple):
 
 
 class AccessLogger(AbstractAccessLogger):
-    """Helper object to log access.
-
-    Usage:
-        log = logging.getLogger("spam")
-        log_format = "%a %{User-Agent}i"
-        access_logger = AccessLogger(log, log_format)
-        access_logger.log(request, response, time)
-
-    Format:
-        %%  The percent sign
-        %a  Remote IP-address (IP-address of proxy if using reverse proxy)
-        %t  Time when the request was started to process
-        %P  The process ID of the child that serviced the request
-        %r  First line of request
-        %s  Response status code
-        %b  Size of response in bytes, including HTTP headers
-        %T  Time taken to serve the request, in seconds
-        %Tf Time taken to serve the request, in seconds with floating fraction
-            in .06f format
-        %D  Time taken to serve the request, in microseconds
-        %{FOO}i  request.headers['FOO']
-        %{FOO}o  response.headers['FOO']
-        %{FOO}e  os.environ['FOO']
-
-    """
 
     LOG_FORMAT_MAP = {
         "a": "remote_address",
@@ -103,8 +78,6 @@ class AccessLogger(AbstractAccessLogger):
         also receive key name (by functools.partial)
 
         """
-        # list of (key, method) tuples, we don't use an OrderedDict as users
-        # can repeat the same key more than once
         methods = list()
 
         for atom in self.FORMAT_RE.findall(log_format):
@@ -123,73 +96,17 @@ class AccessLogger(AbstractAccessLogger):
         log_format = self.CLEANUP_RE.sub(r"%\1", log_format)
         return log_format, methods
 
-    @staticmethod
-    def _format_i(
-        key: str, request: BaseRequest, response: StreamResponse, time: float
-    ) -> str:
-        # suboptimal, make istr(key) once
-        return request.headers.get(key, "-")
 
-    @staticmethod
-    def _format_o(
-        key: str, request: BaseRequest, response: StreamResponse, time: float
-    ) -> str:
-        # suboptimal, make istr(key) once
-        return response.headers.get(key, "-")
 
-    @staticmethod
-    def _format_a(request: BaseRequest, response: StreamResponse, time: float) -> str:
-        ip = request.remote
-        return ip if ip is not None else "-"
 
-    @classmethod
-    def _get_local_time(cls) -> datetime.datetime:
-        if cls._cached_tz is None or time_mod.time() >= cls._cached_tz_expires:
-            gmtoff = time_mod.localtime().tm_gmtoff
-            cls._cached_tz = tz = datetime.timezone(datetime.timedelta(seconds=gmtoff))
 
-            now = datetime.datetime.now(tz)
-            # Expire at every 30 mins, as any DST change should occur at 0/30 mins past.
-            d = now + datetime.timedelta(minutes=30)
-            d = d.replace(minute=30 if d.minute >= 30 else 0, second=0, microsecond=0)
-            cls._cached_tz_expires = d.timestamp()
-            return now
 
-        return datetime.datetime.now(cls._cached_tz)
 
-    @staticmethod
-    def _format_t(request: BaseRequest, response: StreamResponse, time: float) -> str:
-        now = AccessLogger._get_local_time()
-        start_time = now - datetime.timedelta(seconds=time)
-        return start_time.strftime("[%d/%b/%Y:%H:%M:%S %z]")
 
-    @staticmethod
-    def _format_P(request: BaseRequest, response: StreamResponse, time: float) -> str:
-        return "<%s>" % os.getpid()
 
-    @staticmethod
-    def _format_r(request: BaseRequest, response: StreamResponse, time: float) -> str:
-        return f"{request.method} {request.path_qs} HTTP/{request.version.major}.{request.version.minor}"
 
-    @staticmethod
-    def _format_s(request: BaseRequest, response: StreamResponse, time: float) -> int:
-        return response.status
 
-    @staticmethod
-    def _format_b(request: BaseRequest, response: StreamResponse, time: float) -> int:
-        return response.body_length
 
-    @staticmethod
-    def _format_T(request: BaseRequest, response: StreamResponse, time: float) -> str:
-        return str(round(time))
-
-    @staticmethod
-    def _format_Tf(request: BaseRequest, response: StreamResponse, time: float) -> str:
-        return "%06f" % time
-
-    @staticmethod
-    def _format_D(request: BaseRequest, response: StreamResponse, time: float) -> str:
-        return str(round(time * 1000000))
 
     def _format_line(
         self, request: BaseRequest, response: StreamResponse, time: float
@@ -198,9 +115,7 @@ class AccessLogger(AbstractAccessLogger):
 
     @property
     def enabled(self) -> bool:
-        """Check if logger is enabled."""
-        # Avoid formatting the log line if it will not be emitted.
-        return self.logger.isEnabledFor(logging.INFO)
+        pass
 
     def log(self, request: BaseRequest, response: StreamResponse, time: float) -> None:
         try:

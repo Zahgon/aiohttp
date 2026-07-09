@@ -1,4 +1,3 @@
-"""Http related parsers and protocol."""
 
 import asyncio
 import re
@@ -30,11 +29,6 @@ MIN_PAYLOAD_FOR_WRITELINES = 2048
 IS_PY313_BEFORE_313_2 = (3, 13, 0) <= sys.version_info < (3, 13, 2)
 IS_PY_BEFORE_312_9 = sys.version_info < (3, 12, 9)
 SKIP_WRITELINES = IS_PY313_BEFORE_313_2 or IS_PY_BEFORE_312_9
-# writelines is not safe for use
-# on Python 3.12+ until 3.12.9
-# on Python 3.13+ until 3.13.2
-# and on older versions it not any faster than write
-# CVE-2024-12254: https://github.com/python/cpython/pull/127656
 
 
 class HttpVersion(NamedTuple):
@@ -76,13 +70,7 @@ class StreamWriter(AbstractStreamWriter):
         self._headers_buf: bytes | None = None
         self._headers_written: bool = False
 
-    @property
-    def transport(self) -> asyncio.Transport | None:
-        return self._protocol.transport
 
-    @property
-    def protocol(self) -> BaseProtocol:
-        return self._protocol
 
     def enable_chunking(self) -> None:
         self.chunked = True
@@ -135,25 +123,20 @@ class StreamWriter(AbstractStreamWriter):
         is_eof: bool,
     ) -> None:
         """Send buffered headers with payload, coalescing into single write."""
-        # Mark headers as written
         self._headers_written = True
         headers_buf = self._headers_buf
         self._headers_buf = None
 
         if TYPE_CHECKING:
-            # Safe because callers (write() and write_eof()) only invoke this method
-            # after checking that self._headers_buf is truthy
             assert headers_buf is not None
 
         if not self.chunked:
-            # Non-chunked: coalesce headers with body
             if chunk:
                 self._writelines((headers_buf, chunk))
             else:
                 self._write(headers_buf)
             return
 
-        # Coalesce headers with chunked data
         if chunk:
             chunk_len_pre = f"{len(chunk):x}\r\n".encode("ascii")
             if is_eof:
@@ -184,7 +167,6 @@ class StreamWriter(AbstractStreamWriter):
 
         if isinstance(chunk, memoryview):
             if chunk.nbytes != len(chunk):
-                # just reshape it
                 chunk = chunk.cast("c")
 
         if self._compress is not None:
@@ -202,7 +184,6 @@ class StreamWriter(AbstractStreamWriter):
                 if not chunk:
                     return
 
-        # Handle buffered headers for small payload optimization
         if self._headers_buf and not self._headers_written:
             self._send_headers_with_payload(chunk, False)
             if drain and self.buffer_size > LIMIT:
@@ -226,7 +207,6 @@ class StreamWriter(AbstractStreamWriter):
         """Write headers to the stream."""
         if self._on_headers_sent is not None:
             await self._on_headers_sent(headers)
-        # status + headers
         buf = _serialize_headers(status_line, headers)
         self._headers_written = False
         self._headers_buf = buf
@@ -241,7 +221,6 @@ class StreamWriter(AbstractStreamWriter):
         self._headers_buf = None
 
         if TYPE_CHECKING:
-            # Safe because we only enter this block when self._headers_buf is truthy
             assert headers_buf is not None
 
         self._write(headers_buf)
@@ -251,24 +230,19 @@ class StreamWriter(AbstractStreamWriter):
         if self._eof:
             return
 
-        # If headers haven't been sent yet, send them now
-        # This handles the case where there's no body at all
         if self._headers_buf and not self._headers_written:
             self._headers_written = True
             headers_buf = self._headers_buf
             self._headers_buf = None
 
             if TYPE_CHECKING:
-                # Safe because we only enter this block when self._headers_buf is truthy
                 assert headers_buf is not None
 
-            # Combine headers and chunked EOF marker in a single write
             if self.chunked:
                 self._writelines((headers_buf, b"0\r\n\r\n"))
             else:
                 self._write(headers_buf)
         elif self.chunked and self._headers_written:
-            # Headers already sent, just send the final chunk marker
             self._write(b"0\r\n\r\n")
 
         self._eof = True
@@ -280,7 +254,6 @@ class StreamWriter(AbstractStreamWriter):
         if chunk and self._on_chunk_sent is not None:
             await self._on_chunk_sent(chunk)
 
-        # Handle body/compression
         if self._compress:
             chunks: list[bytes] = []
             chunks_len = 0
@@ -293,26 +266,22 @@ class StreamWriter(AbstractStreamWriter):
             chunks.append(flush_chunk)
             assert chunks_len
 
-            # Send buffered headers with compressed data if not yet sent
             if self._headers_buf and not self._headers_written:
                 self._headers_written = True
                 headers_buf = self._headers_buf
                 self._headers_buf = None
 
                 if self.chunked:
-                    # Coalesce headers with compressed chunked data
                     chunk_len_pre = f"{chunks_len:x}\r\n".encode("ascii")
                     self._writelines(
                         (headers_buf, chunk_len_pre, *chunks, b"\r\n0\r\n\r\n")
                     )
                 else:
-                    # Coalesce headers with compressed data
                     self._writelines((headers_buf, *chunks))
                 await self.drain()
                 self._eof = True
                 return
 
-            # Headers already sent, just write compressed data
             if self.chunked:
                 chunk_len_pre = f"{chunks_len:x}\r\n".encode("ascii")
                 self._writelines((chunk_len_pre, *chunks, b"\r\n0\r\n\r\n"))
@@ -324,18 +293,14 @@ class StreamWriter(AbstractStreamWriter):
             self._eof = True
             return
 
-        # No compression - send buffered headers if not yet sent
         if self._headers_buf and not self._headers_written:
-            # Use helper to send headers with payload
             self._send_headers_with_payload(chunk, True)
             await self.drain()
             self._eof = True
             return
 
-        # Handle remaining body
         if self.chunked:
             if chunk:
-                # Write final chunk with EOF marker
                 self._writelines(
                     (f"{len(chunk):x}\r\n".encode("ascii"), chunk, b"\r\n0\r\n\r\n")
                 )
@@ -364,8 +329,6 @@ class StreamWriter(AbstractStreamWriter):
             await protocol._drain_helper()
 
 
-# https://www.rfc-editor.org/info/rfc9110/#section-5.5-5
-# https://www.rfc-editor.org/info/rfc9112/#section-4-3
 _FORBIDDEN_HEADER_CHARS_RE = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
 
 
@@ -378,11 +341,6 @@ def _safe_header(string: str) -> str:
     return string
 
 
-def _py_serialize_headers(status_line: str, headers: "CIMultiDict[str]") -> bytes:
-    _safe_header(status_line)
-    headers_gen = (_safe_header(k) + ": " + _safe_header(v) for k, v in headers.items())
-    line = status_line + "\r\n" + "\r\n".join(headers_gen) + "\r\n\r\n"
-    return line.encode("utf-8")
 
 
 _serialize_headers = _py_serialize_headers

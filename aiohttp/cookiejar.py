@@ -27,22 +27,16 @@ __all__ = ("CookieJar", "DummyCookieJar")
 
 CookieItem = Union[str, "Morsel[str]"]
 
-# We cache these string methods here as their use is in performance critical code.
 _FORMAT_PATH = "{}/{}".format
 _FORMAT_DOMAIN_REVERSED = "{1}.{0}".format
 
-# The minimum number of scheduled cookie expirations before we start cleaning up
-# the expiration heap. This is a performance optimization to avoid cleaning up the
-# heap too often when there are only a few scheduled expirations.
 _MIN_SCHEDULED_COOKIE_EXPIRATION = 100
 _SIMPLE_COOKIE = SimpleCookie()
 
-# Not persisted; the absolute deadline is saved instead.
 _RELATIVE_EXPIRY_ATTRS = frozenset(("max-age", "expires"))
 
 
 class CookieJar(AbstractCookieJar):
-    """Implements cookie storage adhering to RFC 6265."""
 
     DATE_TOKENS_RE = re.compile(
         r"[\x09\x20-\x2F\x3B-\x40\x5B-\x60\x7B-\x7E]*"
@@ -60,21 +54,15 @@ class CookieJar(AbstractCookieJar):
 
     DATE_YEAR_RE = re.compile(r"(\d{2,4})")
 
-    # calendar.timegm() fails for timestamps after datetime.datetime.max
-    # Minus one as a loss of precision occurs when timestamp() is called.
     MAX_TIME = (
         int(datetime.datetime.max.replace(tzinfo=datetime.timezone.utc).timestamp()) - 1
     )
     try:
         calendar.timegm(time.gmtime(MAX_TIME))
     except OSError:
-        # Hit the maximum representable time on Windows
-        # https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/localtime-localtime32-localtime64
         MAX_TIME = calendar.timegm((3000, 12, 31, 23, 59, 59, -1, -1, -1))
     except OverflowError:
-        # #4515: datetime.max may not be representable on 32-bit platforms
         MAX_TIME = 2**31 - 1
-    # Avoid minuses in the future, 3x faster
     SUB_MAX_TIME = MAX_TIME - 1
 
     def __init__(
@@ -111,65 +99,18 @@ class CookieJar(AbstractCookieJar):
         self._expire_heap: list[tuple[float, tuple[str, str, str]]] = []
         self._expirations: dict[tuple[str, str, str], float] = {}
 
-    @property
-    def unsafe(self) -> bool:
-        return self._unsafe
 
-    @property
-    def quote_cookie(self) -> bool:
-        return self._quote_cookie
 
     @property
     def cookies(self) -> MappingProxyType[tuple[str, str], SimpleCookie]:
-        """Return the cookies stored in this jar."""
-        return MappingProxyType(self._cookies)
+        pass
 
     @property
     def host_only_cookies(self) -> frozenset[tuple[str, str]]:
-        """Return the host-only cookies stored in this jar."""
-        return frozenset(self._host_only_cookies)
+        pass
 
     def save(self, file_path: PathLike) -> None:
-        """Save cookies to a file using JSON format.
-
-        :param file_path: Path to file where cookies will be serialized,
-            :class:`str` or :class:`pathlib.Path` instance.
-        """
-        file_path = pathlib.Path(file_path)
-        data: dict[str, dict[str, dict[str, str | bool | float]]] = {}
-        for (domain, path), cookie in self._cookies.items():
-            key = f"{domain}|{path}"
-            data[key] = {}
-            for name, morsel in cookie.items():
-                morsel_data: dict[str, str | bool | float] = {
-                    "key": morsel.key,
-                    "value": morsel.value,
-                    "coded_value": morsel.coded_value,
-                }
-                # Skip relative expiry; the absolute deadline is saved below.
-                for attr in morsel._reserved:  # type: ignore[attr-defined]
-                    if attr in _RELATIVE_EXPIRY_ATTRS:
-                        continue
-                    attr_val = morsel[attr]
-                    if attr_val:
-                        morsel_data[attr] = attr_val
-                # Persist or it reloads as a domain cookie and leaks to subdomains.
-                if (domain, name) in self._host_only_cookies:
-                    morsel_data["host_only"] = True
-                if (exp := self._expirations.get((domain, path, name))) is not None:
-                    morsel_data["expires_timestamp"] = exp
-                data[key][name] = morsel_data
-
-        # Cookie persistence may include authentication/session tokens.
-        # Use 0o600 at creation time to avoid umask-dependent overexposure
-        # and enforce least-privilege access to sensitive credential data.
-        with open(
-            file_path,
-            mode="w",
-            encoding="utf-8",
-            opener=lambda path, flags: os.open(path, flags, 0o600),
-        ) as f:
-            json.dump(data, f, indent=2)
+        pass
 
     def load(self, file_path: PathLike) -> None:
         """Load cookies from a JSON file.
@@ -194,8 +135,6 @@ class CookieJar(AbstractCookieJar):
             domain, path = compound_key.split("|", 1)
             for name, morsel_data in cookie_data.items():
                 morsel: Morsel[str] = Morsel()
-                # Use __setstate__ to bypass validation, same pattern
-                # used in _build_morsel and _cookie_helpers.
                 morsel.__setstate__(  # type: ignore[attr-defined]
                     {
                         "key": morsel_data["key"],
@@ -203,7 +142,6 @@ class CookieJar(AbstractCookieJar):
                         "coded_value": morsel_data["coded_value"],
                     }
                 )
-                # Restore morsel attributes
                 for attr in morsel._reserved:  # type: ignore[attr-defined]
                     if attr in morsel_data and attr not in (
                         "key",
@@ -211,14 +149,12 @@ class CookieJar(AbstractCookieJar):
                         "coded_value",
                     ):
                         morsel[attr] = morsel_data[attr]
-                # Drop the domain so update_cookies() re-marks it host-only.
                 if morsel_data.get("host_only"):
                     morsel["domain"] = ""
                 response_url = (
                     URL.build(scheme="https", host=domain) if domain else URL()
                 )
                 self.update_cookies({name: morsel}, response_url)
-                # Restore the absolute deadline; update_cookies() schedules none.
                 if (exp := morsel_data.get("expires_timestamp")) is not None:
                     self._expire_cookie(float(exp), domain, path, name)
         self._do_expiration()
@@ -246,8 +182,6 @@ class CookieJar(AbstractCookieJar):
         if to_del:
             self._delete_cookies(to_del)
 
-    def clear_domain(self, domain: str) -> None:
-        self.clear(lambda x: self._is_domain_match(domain, x["domain"]))
 
     def __iter__(self) -> "Iterator[Morsel[str]]":
         self._do_expiration()
@@ -267,19 +201,10 @@ class CookieJar(AbstractCookieJar):
         if not (expire_heap_len := len(self._expire_heap)):
             return
 
-        # If the expiration heap grows larger than the number expirations
-        # times two, we clean it up to avoid keeping expired entries in
-        # the heap and consuming memory. We guard this with a minimum
-        # threshold to avoid cleaning up the heap too often when there are
-        # only a few scheduled expirations.
         if (
             expire_heap_len > _MIN_SCHEDULED_COOKIE_EXPIRATION
             and expire_heap_len > len(self._expirations) * 2
         ):
-            # Remove any expired entries from the expiration heap
-            # that do not match the expiration time in the expirations
-            # as it means the cookie has been re-added to the heap
-            # with a different expiration time.
             self._expire_heap = [
                 entry
                 for entry in self._expire_heap
@@ -289,16 +214,11 @@ class CookieJar(AbstractCookieJar):
 
         now = time.time()
         to_del: list[tuple[str, str, str]] = []
-        # Find any expired cookies and add them to the to-delete list
         while self._expire_heap:
             when, cookie_key = self._expire_heap[0]
             if when > now:
                 break
             heapq.heappop(self._expire_heap)
-            # Check if the cookie hasn't been re-added to the heap
-            # with a different expiration time as it will be removed
-            # later when it reaches the top of the heap and its
-            # expiration time is met.
             if self._expirations.get(cookie_key) == when:
                 to_del.append(cookie_key)
 
@@ -315,7 +235,6 @@ class CookieJar(AbstractCookieJar):
     def _expire_cookie(self, when: float, domain: str, path: str, name: str) -> None:
         cookie_key = (domain, path, name)
         if self._expirations.get(cookie_key) == when:
-            # Avoid adding duplicates to the heap
             return
         heapq.heappush(self._expire_heap, (when, cookie_key))
         self._expirations[cookie_key] = when
@@ -325,7 +244,6 @@ class CookieJar(AbstractCookieJar):
         hostname = response_url.raw_host
 
         if not self._unsafe and is_ip_address(hostname):
-            # Don't accept cookies from IPs
             return
 
         if isinstance(cookies, Mapping):
@@ -339,34 +257,27 @@ class CookieJar(AbstractCookieJar):
 
             domain = cookie["domain"]
 
-            # ignore domains with trailing dots
             if domain and domain[-1] == ".":
                 domain = ""
                 del cookie["domain"]
 
             if not domain and hostname is not None:
-                # Set the cookie's domain to the response hostname
-                # and set its host-only-flag
                 self._host_only_cookies.add((hostname, name))
                 domain = cookie["domain"] = hostname
 
             if domain and domain[0] == ".":
-                # Remove leading dot
                 domain = domain[1:]
                 cookie["domain"] = domain
 
             if hostname and not self._is_domain_match(domain, hostname):
-                # Setting cookies for different domains is not allowed
                 continue
 
             path = cookie["path"]
             if not path or path[0] != "/":
-                # Set the cookie's path to the response path
                 path = response_url.path
                 if not path.startswith("/"):
                     path = "/"
                 else:
-                    # Cut everything from the last slash to the end
                     path = "/" + path[1 : path.rfind("/")]
                 cookie["path"] = path
             path = path.rstrip("/")
@@ -387,8 +298,6 @@ class CookieJar(AbstractCookieJar):
 
             key = (domain, path)
             if self._cookies[key].get(name) != cookie:
-                # Don't blow away the cache if the same
-                # cookie gets set again
                 self._cookies[key][name] = cookie
                 self._morsel_cache[key].pop(name, None)
 
@@ -402,16 +311,11 @@ class CookieJar(AbstractCookieJar):
                 DeprecationWarning,
             )
             request_url = URL(request_url)
-        # We always use BaseCookie now since all
-        # cookies set on on filtered are fully constructed
-        # Morsels, not just names and values.
         filtered: BaseCookie[str] = BaseCookie()
         if not self._cookies:
-            # Skip do_expiration() if there are no cookies.
             return filtered
         self._do_expiration()
         if not self._cookies:
-            # Skip rest of function if no non-expired cookies.
             return filtered
         hostname = request_url.raw_host or ""
 
@@ -422,15 +326,12 @@ class CookieJar(AbstractCookieJar):
                 request_origin = request_url.origin()
             is_not_secure = request_origin not in self._treat_as_secure_origin
 
-        # Send shared cookie
         key = ("", "")
         for c in self._cookies[key].values():
-            # Check cache first
             if c.key in self._morsel_cache[key]:
                 filtered[c.key] = self._morsel_cache[key][c.key]
                 continue
 
-            # Build and cache the morsel
             mrsl_val = self._build_morsel(c)
             self._morsel_cache[key][c.key] = mrsl_val
             filtered[c.key] = mrsl_val
@@ -440,18 +341,14 @@ class CookieJar(AbstractCookieJar):
                 return filtered
             domains: Iterable[str] = (hostname,)
         else:
-            # Get all the subdomains that might match a cookie (e.g. "foo.bar.com", "bar.com", "com")
             domains = itertools.accumulate(
                 reversed(hostname.split(".")), _FORMAT_DOMAIN_REVERSED
             )
 
-        # Get all the path prefixes that might match a cookie (e.g. "", "/foo", "/foo/bar")
         paths = itertools.accumulate(request_url.path.split("/"), _FORMAT_PATH)
-        # Create every combination of (domain, path) pairs.
         pairs = itertools.product(domains, paths)
 
         path_len = len(request_url.path)
-        # Point 2: https://www.rfc-editor.org/rfc/rfc6265.html#section-5.4
         for p in pairs:
             if p not in self._cookies:
                 continue
@@ -461,19 +358,16 @@ class CookieJar(AbstractCookieJar):
                 if (domain, name) in self._host_only_cookies and domain != hostname:
                     continue
 
-                # Skip edge case when the cookie has a trailing slash but request doesn't.
                 if len(cookie["path"]) > path_len:
                     continue
 
                 if is_not_secure and cookie["secure"]:
                     continue
 
-                # We already built the Morsel so reuse it here
                 if name in self._morsel_cache[p]:
                     filtered[name] = self._morsel_cache[p][name]
                     continue
 
-                # Build and cache the morsel
                 mrsl_val = self._build_morsel(cookie)
                 self._morsel_cache[p][name] = mrsl_val
                 filtered[name] = mrsl_val
@@ -489,9 +383,6 @@ class CookieJar(AbstractCookieJar):
             value, coded_value = _SIMPLE_COOKIE.value_encode(cookie.value)
         else:
             coded_value = value = cookie.value
-        # We use __setstate__ instead of the public set() API because it allows us to
-        # bypass validation and set already validated state. This is more stable than
-        # setting protected attributes directly.
         morsel.__setstate__({"key": cookie.key, "value": value, "coded_value": coded_value})  # type: ignore[attr-defined]
         return morsel
 
@@ -576,11 +467,6 @@ class CookieJar(AbstractCookieJar):
 
 
 class DummyCookieJar(AbstractCookieJar):
-    """Implements a dummy cookie storage.
-
-    It can be used with the ClientSession when no cookie processing is needed.
-
-    """
 
     def __iter__(self) -> "Iterator[Morsel[str]]":
         while False:
@@ -589,23 +475,15 @@ class DummyCookieJar(AbstractCookieJar):
     def __len__(self) -> int:
         return 0
 
-    @property
-    def unsafe(self) -> bool:
-        return False
 
-    @property
-    def quote_cookie(self) -> bool:
-        return True
 
     @property
     def cookies(self) -> MappingProxyType[tuple[str, str], SimpleCookie]:
-        """Return an empty mapping."""
-        return MappingProxyType({})
+        pass
 
     @property
     def host_only_cookies(self) -> frozenset[tuple[str, str]]:
-        """Return an empty frozenset."""
-        return frozenset()
+        pass
 
     def clear(self, predicate: ClearCookiePredicate | None = None) -> None:
         pass

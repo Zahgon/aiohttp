@@ -84,49 +84,10 @@ def normalize_path_middleware(
     correct_configuration = not (append_slash and remove_slash)
     assert correct_configuration, "Cannot both remove and append slash"
 
-    async def impl(request: Request, handler: Handler) -> StreamResponse:
-        if isinstance(
-            request.match_info.http_exception, (HTTPNotFound, HTTPMethodNotAllowed)
-        ):
-            paths_to_check = []
-            if "?" in request.raw_path:
-                path, query = request.raw_path.split("?", 1)
-                query = "?" + query
-            else:
-                query = ""
-                path = request.raw_path
-
-            if merge_slashes:
-                paths_to_check.append(re.sub("//+", "/", path))
-            if append_slash and not request.path.endswith("/"):
-                paths_to_check.append(path + "/")
-            if remove_slash and request.path.endswith("/"):
-                paths_to_check.append(path[:-1])
-            if merge_slashes and append_slash:
-                paths_to_check.append(re.sub("//+", "/", path + "/"))
-            if merge_slashes and remove_slash and path.endswith("/"):
-                merged_slashes = re.sub("//+", "/", path)
-                paths_to_check.append(merged_slashes[:-1])
-
-            for path in paths_to_check:
-                path = re.sub("^//+", "/", path)  # SECURITY: GHSA-v6wp-4m6f-gcjg
-                resolves, request = await _check_request_resolves(request, path)
-                if resolves:
-                    raise redirect_class(request.raw_path + query)
-
-        return await handler(request)
 
     return impl
 
 
 def _fix_request_current_app(app: "Application") -> Middleware:
-    async def impl(request: Request, handler: Handler) -> StreamResponse:
-        match_info = request.match_info
-        prev = match_info.current_app
-        match_info.current_app = app
-        try:
-            return await handler(request)
-        finally:
-            match_info.current_app = prev
 
     return impl
